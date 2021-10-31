@@ -5,3 +5,9 @@
 ## 以下为英文原文地址
 
 * [原文地址](https://pdos.csail.mit.edu/6.828/2018/xv6/book-rev11.pdf)
+
+## 如何使用本仓库
+
+* 安装tectonic环境
+* 克隆本仓库
+* 在克隆的目录里执行 `tectonic -X build`
