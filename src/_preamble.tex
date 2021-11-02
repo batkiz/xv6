@@ -1,4 +1,4 @@
-\documentclass[oneside]{ctexbook}
+\documentclass[twoside]{ctexbook}
 
 % Packages
 \usepackage{xeCJK}       % 中文支持
@@ -34,7 +34,7 @@
 }
 
 \newpagestyle{main}{        % 自定义页眉格式
-\sethead[\thepage][][Chapter \thechapter: \quad \chaptertitle] % 偶数页页眉格式
+\sethead[\thepage][][第\thechapter{}章: \quad \chaptertitle] % 偶数页页眉格式
 {\thesection \quad \sectiontitle}{}{\thepage}   % 奇数页页眉格式
 \headrule                   % 页眉下水平分隔线
 }
@@ -57,6 +57,12 @@ escapechar  =   `,                      % 逃逸字符
 \lstnewenvironment{blacklisting}    % 全黑代码环境，用于代码输出
 {\lstset{keywordstyle=\color{black},stringstyle=\color{black},commentstyle=\color{black}}}
 {}
+
+\renewcommand {\thetable} {\thechapter{}-\arabic{table}}    %表格编号
+\renewcommand\figureautorefname{表}                         % 图片编号
+
+\renewcommand {\thefigure} {\thechapter{}-\arabic{figure}}  % 图片编号
+\renewcommand\figureautorefname{图}                         % 图片编号
 
 \title{\textbf{xv6} \\ 一个简单的类Unix操作系统课程}
 \author{Russ Cox \\ Frans Kaashoek \\ Robert Morris}
