@@ -209,7 +209,8 @@ shell保证它总是至少有三个文件描述符是打开的(8707)，默认情
 然后\texttt{cat}执行时，文件描述符\texttt{0}（标准输入）就指向\texttt{input.txt}。
 
 xv6 shell中I/O重定向的代码就是用这种方式工作的(8630)。
-回想之前shell已经克隆好子进程，\texttt{runcmd}即将调用\texttt{exec}加载新程序。\footnote{todo！}
+回想之前shell已经克隆好子进程，\\
+\texttt{runcmd}即将调用\texttt{exec}加载新程序。\footnote{todo！}
 现在应该很清楚为什么说分离\texttt{fork}和\texttt{exec}是一个很聪明的设计了。
 因为如果它们是分离的，shell可以fork一个子进程，然后在子进程中使用\texttt{open}、\texttt{close}、\texttt{dup}来改变标准输入和输出文件描述符，然后再调用\texttt{exec}。
 
@@ -246,3 +247,64 @@ xv6 shell中I/O重定向的代码就是用这种方式工作的(8630)。
 xv6 shell不支持错误文件描述符的I/O重定向，但现在你知道了如何实现它。
 
 文件描述符是一个强大的抽象，因为它们隐藏了它们连接到的东西的细节：一个进程写入到文件描述符1可能会写入到一个文件、也可能写入到一个设备例如控制台，也可能写入到一个管道。
+
+\section*{管道}
+\emph{管道(pipe)}是一个暴露给进程的很小的内核缓冲区，在进程看来它是两个文件描述符，一个用于读，一个用于写。
+向管道的一端写入的数据可以从管道的另一端读取出来。
+管道提供了一种进程间通信的方式。
+
+下面的示例代码运行\texttt{wc}程序，并把标准输入连接到一个管道的读取端：
+\begin{lstlisting}
+    int p[2];
+    char *argv[2];
+
+    argv[0] = "wc";
+    argv[1] = 0;
+
+    pipe(p);
+    if (fork() == 0) {
+        close(0);
+        dup(p[0]);
+        close(p[0]);
+        close(p[1]);
+        exec("/bin/wc", argv);
+    } else {
+        close(p[0]);
+        write(p[1], "hello world\n", 12);
+        close(p[1]);
+    }
+\end{lstlisting}
+
+这个程序调用了\texttt{pipe}，这会创建一个新的管道，并把输入和输出文件描述符记录到数组\texttt{p}中。
+在\texttt{fork}之后，父进程和子进程都有指向管道的文件描述符。
+子进程复制输入端到文件描述符0，然后关闭了\texttt{p}中的文件描述符，然后运行了\texttt{wc}。
+当\texttt{wc}从标准输入读取时，它实际上是从管道读取。
+父进程关闭了管道的输入端，向管道写入数据，然后关闭了写入端。
+
+如果没有数据可用，对管道的\texttt{read}调用会等待有数据被写入到管道或者所有指向管道输入端的文件描述符都已经被关闭；在后面这种情况下，\texttt{read}会返回0，就像是读取到普通文件的末尾一样。
+\texttt{read}会阻塞直到有新的数据到达也是子进程运行\texttt{wc}之前先把管道的写入端关闭的一个原因：如果\texttt{wc}的一个文件描述符指向管道的写入端，那么\texttt{wc}将永远不会看到文件的结果。
+
+xv6 shell以类似上面代码的方式实现了管道符(\texttt{|})例如\texttt{grep fork sh.c | wc -l}(8650)。
+子进程首先创建一个管道来连接管道符的左侧和右侧。
+然后它为左侧和右侧分别调用\texttt{fork}和\texttt{runcmd}，然后等待两侧都结束。
+管道符的右侧可能是一个包含管道的命令（例如，\texttt{a | b | c}，这时它自己还会fork两个新的子进程（一个运行\texttt{b}，一个运行\texttt{c}）。
+因此，shell可能会创建一棵子进程树。
+树的叶节点就是命令，内部的节点是等待左侧和右侧的子进程都执行结束的进程。
+理论上讲，你可以让内部的节点运行管道符左侧的命令，但正确的实现这样的逻辑会让实现更加复杂。
+
+管道可能看起来没有临时文件强大：管道
+\begin{lstlisting}
+    echo hello world | wc    
+\end{lstlisting}
+可以被实现为没有管道的版本
+\begin{lstlisting}
+    echo hello world >/tmp/xyz; wc </tmp/xyz
+\end{lstlisting}
+
+在这种情况下，管道相比临时文件至少有4个优势。
+第一，管道会自动清理自己；而使用文件重定向，shell需要在结束之后谨慎地删除\texttt{/tmp/xyz}。
+第二，管道可以传输任意长的数据流，而文件重定向需要磁盘上有足够大的空闲空间来存储所有的数据。
+第三，管道运行不同阶段并行执行，而文件的方法需要第一个程序结束之后才能运行第二个。
+第四，如果你在实现进程间通信，管道的阻塞读取和写入比文件的非阻塞语言更加高效。
+
+\section*{文件系统}
