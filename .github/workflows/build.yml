@@ -1,0 +1,34 @@
+name: Nightly Build
+
+on:
+  schedule:
+    - cron: '0 16 * * *'
+  workflow_dispatch:
+
+jobs:
+  nightly-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: wtfjoke/setup-tectonic@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: 3.7
+
+      - name: build pdf
+        run: |
+          apt-get update && apt-get install -y libfuse2
+          tectonic -X build
+
+      # - name: upload pdf file to release
+      #   uses: svenstaro/upload-release-action@v2
+      #   with:
+      #     repo_token: ${{ secrets.GITHUB_TOKEN }}
+      #     file: src/ProgrammingRust.pdf
+      #     asset_name: ProgrammingRust.pdf
+      #     tag: refs/tags/v0.99
+      #     overwrite: true
