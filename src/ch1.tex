@@ -5,29 +5,30 @@
 它还在多个程序之间共享硬件，来让它们同时（或者看起来同时）运行。
 最后，操作系统还提供可控的方式以允许程序进行交互，因此它们可以共享数据或者协同工作。
 
-一个操作系统通过接口向用户称需提供服务。
-设计一个好的接口被证明是非常困难的。
+一个操作系统通过接口向用户程序提供服务。
+事实证明设计一个好的接口被证明是非常困难的。
 一方面，我们希望接口尽量简单和特化，因为这样可以更容易地正确实现它们。
 另一方面，我们还希望向应用提供很多复杂的特性。
 解决这种问题的方法是设计可以通过一些机制进行组合来提供复杂服务的简单接口。
 
 这本书使用一个单独的操作系统作为具体的例子来展示操作系统的概念。
-该操作系统，xv6，提供了Ken Thompson和Dennis Ritchie的Unix操作系统中引入的基本接口，同时模仿了Unix的内部设计。
+该操作系统，xv6，提供了Ken Thompson和Dennis Ritchie的Unix操作系统[17]中引入的基本接口，同时模仿了Unix的内部设计。
 Unix提供了一个特化的接口，但它们的机制结合得非常好，提供了惊人的通用性。
-这个接口如此成功，以至于现代操作系统——BSD，Linux，Mac OS X，Solaris，甚至在小范围内，就连Microsoft Windows都有类Unix接口。
+这个接口如此成功，以至于现代操作系统——BSD，Linux，Mac OS X，Solaris，甚至在某种程度上，就连Microsoft Windows都有类Unix接口。
 理解xv6是理解这些现代操作系统的一个好的开始。
 
-如\autoref{f0-1}所示，xv6采用了\emph{内核(kernel)}的传统模式，内核是一个为运行中的程序提供服务的特殊程序。
+如\autoref{f1-1}所示，xv6采用了\emph{内核(kernel)}的传统模式，内核是一个为运行中的程序提供服务的特殊程序。
 每一个运行中的程序被称为一个\emph{进程(process)}，它们都拥有包含指令、数据、栈的内存空间。
 指令实现了程序的计算过程。
 数据是计算操作时的变量。
 栈用于组织程序的过程调用。
+一台计算机里通常有很多进程单只有一个内核。
 
 \begin{figure}[htbp]
     \centering
-    \includegraphics[width=0.8\textwidth]{../imgs/f0-1.png}
+    \includegraphics[width=0.8\textwidth]{../imgs/f1-1.png}
     \caption{一个内核和两个用户进程}
-    \label{f0-1}
+    \label{f1-1}
 \end{figure}
 
 当一个进程需要调用一个内核服务时，它会调用操作系统接口中的一个过程调用。
@@ -35,44 +36,45 @@ Unix提供了一个特化的接口，但它们的机制结合得非常好，提�
 系统调用会进入内核，然后内核执行服务并返回。
 因此一个进程会在\emph{用户空间(user space)}和\emph{内核空间(kernel space)}中交替执行。
 
-内核使用CPU的硬件保护机制来保证每个在用户空间执行的进程只能访问它自己的内存。
+正如后续章节中详细介绍的那样，内核使用CPU\footnote{本书中使用术语\emph{CPU}（中央处理器的缩写）来指代执行计算的硬件。其他文档（例如RISC-V规范）中也可能使用处理器(processor)、核心(core)、hart来代替CPU。}的硬件保护机制来保证每个在用户空间执行的进程只能访问它自己的内存。
 内核在执行时需要硬件特权来实现这些保护；而用户程序执行时没有特权。
 当一个用户程序调用一个系统调用时，硬件会提高特权等级，然后开始执行内核中事先设置好的一个函数。
 
-一个内核提供的系统调用的集合就是用户程序看到的接口。
+内核提供的系统调用的集合就是用户程序看到的接口。
 xv6内核提供了Unix内核通常提供的服务和系统调用的一个子集。
-\autoref{t0-1}列出了xv6的所有系统调用。
+\autoref{t1-1}列出了xv6的所有系统调用。
 
 \begin{table}[htbp]
     \centering
     \begin{tabular}{ll}
         \textbf{系统调用}   & \textbf{介绍} \\
-        fork()  & 创建一个子进程    \\
-        exit()  & 终止当前进程      \\
-        wait()  & 等待一个子进程退出 \\
-        kill(pid)   & 终止pid进程   \\
-        getpid()    & 返回当前进程的pid         \\
-        sleep(n)    & 睡眠\texttt{n}个时钟周期  \\
-        exec(filename, *argv)   & 加载一个文件并执行它  \\
-        sbrk(n) & 将进程的内存扩大n个字节   \\
-        open(filename, flags)   & 打开一个文件；flag指示读/写 \\
-        read(fd, buf, n)    & 从一个打开的文件中读取n个字节到buf \\
-        write(fd, buf, n)   & 将n个字节写入到一个打开的文件中 \\
-        close(fd)   & 关闭打开的文件fd  \\
-        dup(fd)     & 复制fd    \\
-        pipe(p)     & 创建一个管道并把fd保存到p \\
-        chdir(dirname)  & 改变当前目录  \\
-        mkdir(dirname)  & 创建一个新目录    \\
-        mknod(name, major, minor)   & 创建一个设备文件  \\
-        fstat(fd)       & 返回有关一个打开的文件的信息  \\
-        link(f1, f2)    & 创建文件f1的别名f2    \\
-        unlink(filename)& 移除一个文件  \\
+        int fork()  & 创建一个子进程，返回子进程的PID。\\
+        int exit(int status)    & 终止当前进程；status会汇报给wait()。不会返回。\\
+        int wait(int *status)   & 等待一个子进程退出；退出状态存储在*status，返回子进程的PID。 \\
+        int kill(int PID)   & 终止PID进程。返回0，出错时返回-1.\\
+        int getPID()    & 返回当前进程的PID。         \\
+        int sleep(int n)    & 暂停\texttt{n}个时钟周期。  \\
+        int exec(char *file, char *argv[])  & 加载一个文件并以给定参数执行它，只有当出错时才会返回。  \\
+        char *sbrk(int n) & 将进程的内存扩大n个字节。返回新内存的起始位置。   \\
+        int open(char *file, int flags) & 打开一个文件；flag指示读/写；返回一个fd（文件描述符）。 \\
+        int write(int fd, char *buf, int n)   & 将从buf开始的n个字节写入到文件描述符fd中；返回n。 \\
+        int read(int fd, char *buf, int n)    & 读取n个字节到buf；返回读取的字节数；或者文件结尾时返回0。 \\
+        int close(int fd)   & 关闭打开的文件fd。  \\
+        int dup(int fd)     & 新创建一个和fd指向同一个文件的文件描述符。    \\
+        int pipe(int p[])     & 创建一个管道，并把读/写它的文件描述符存入p[0]和p[1]。 \\
+        int chdir(char *dir)  & 改变当前目录。  \\
+        int mkdir(char *dir)  & 创建一个新目录。    \\
+        int mknod(char * file, int, int)   & 创建一个设备文件。  \\
+        int fstat(int fd, struct stat *st)       & 把一个打开的文件的信息存入*st。  \\
+        int stat(char *file, struct stat *st) &  把一个命名文件的信息存入*st。\\
+        int link(char *file1, char *file2)    & 创建文件file1的别名file2    \\
+        int unlink(char *file)& 移除一个文件。 \\
     \end{tabular}
-    \caption{xv6系统调用}
-    \label{t0-1}
+    \caption{xv6系统调用。如果没有特殊说明，这些调用返回0表示没有错误，返回-1表示出错。}
+    \label{t1-1}
 \end{table}
 
-本章的剩余部分概述了xv6的服务——进程、内存、文件描述符、管道、文件系统——并且通过代码片段对它们进行说明，并讨论\emph{shell}（与传统的类Unix系统交互的主要用户接口）如何使用它们。
+本章的剩余部分概述了xv6的服务——进程、内存、文件描述符、管道、文件系统——并且通过代码片段对它们进行说明，并讨论\emph{shell}（Unix的命令行用户接口）如何使用它们。
 shell对系统调用的使用展示了它们的设计有多么精巧。
 
 shell是一个读取用户的命令然后执行它们的普通程序。
@@ -80,44 +82,49 @@ shell是一个读取用户的命令然后执行它们的普通程序。
 这一事实展示了系统调用接口的强大：shell并没有什么特殊的地方。
 这也意味着shell可以很容易的替换；因此，现代Unix系统有很多shell可以选择，每一个都有自己的用户借口和脚本特性。
 xv6的shell是Unix Bourne Shell的基础部分的一个简单实现。
-它的实现可以在行(8550)找到。
+它的实现可以在行\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L1}{user/sh.c:1}找到。
 
 \section{处理器和内存}
 
 一个xv6进程由用户空间内存（指令、数据、栈）和内核中私有的每个进程的状态组成。
-xv6可以\emph{分时(time-share)}处理：它在一个等待执行的进程的集合中透明地切换可用的CPU。
+xv6\emph{分时共享(time-share)}处理器：它在一个等待执行的进程的集合中透明地切换可用的CPU。
 当一个进程不在执行时，xv6会保存它的CPU寄存器，并在下一次执行这个进程时恢复它们。
-内核为每个进程关联一个进程标识符，或者叫\texttt{pid}。
+内核为每个进程关联一个进程标识符，或者叫\texttt{PID}。
 
 一个进程可能会使用\texttt{fork}系统调用创建一个新的进程。
-\texttt{fork}会创建一个新的进程，称为\emph{子进程(child process)}，它和调用者进程（称为\emph{父进程(parent process)}）有完全相同的内存内容。
-\texttt{fork}在父进程和子进程中都会返回。
-在父进程中，\texttt{fork}会返回子进程的pid；而在子进程中它返回0。
-例如，考虑下面的程序片段：
+\texttt{fork}会给予新进程一份调用者进程的内存的拷贝，包括指令和数据。
+\texttt{fork}在原进程和新进程中都会返回。
+在原进程中，\texttt{fork}会返回新进程的PID；而在子进程中，\texttt{fork}返回0。
+原进程和新进程通常被称为\emph{父(parent)进程}和\emph{子(child)进程}。
+
+例如，考虑下面来自《C Programming language》[7]中的程序片段：
 
 \begin{lstlisting}
     int pid = fork();
     if (pid > 0) {
         printf("parent: child=%d\n", pid);
-        pid = wait();
+        pid = wait((int *) 0);
         printf("child %d is done\n", pid);
     } else if (pid == 0) {
         printf("child: exiting\n");
-        exit();
+        exit(0);
     } else {
         printf("fork error\n");
     }
 \end{lstlisting}
 
 \texttt{exit}系统调用会让调用者进程停止执行并释放资源，例如内存和打开的文件。
-\texttt{wait}系统调用返回当前进程的一个退出的子进程的pid；如果调用者的子进程都还没有退出，那么\texttt{wait}会等待一个子进程退出。
+\texttt{wait}系统调用返回当前进程的一个退出的（或者被杀死的）子进程的PID，并把子进程的退出状态拷贝到传给wait的地址处；如果调用者的子进程都还没有退出，那么\texttt{wait}会等待一个子进程退出。
+如果调用者没有子进程，\texttt{wait}会立刻返回-1。
+如果父进程并不关心子进程的退出状态，它可以向\texttt{wait}传递0地址。
+
 在这个例子中，会输出：
 \begin{blacklisting}
     parent: child=1234
     child: exiting
 \end{blacklisting}    
 
-也可能以其他顺序输出，取决于父进程还是子进程先到达\texttt{printf}调用。
+也可能以其他顺序输出（甚至互相交错），取决于父进程还是子进程先到达\texttt{printf}调用。
 当子进程退出后，父进程的\texttt{wait}会返回，然后父进程会打印出
 \begin{blacklisting}
     parent: child 1234 is done
@@ -129,9 +136,10 @@ xv6可以\emph{分时(time-share)}处理：它在一个等待执行的进程的�
 
 \texttt{exec}系统调用会把调用者进程的内存替换为从文件系统的某个文件中加载的一个新的内存镜像。
 这个文件必须有特定的格式，这个格式指定了文件中哪一部分存储指令、哪一部分是数据、从哪一条指令开始执行，等等。
-xv6使用ELF格式，\autoref{ch02}中将会详细介绍这种格式。
+xv6使用ELF格式，\autoref{ch03}中将会详细介绍这种格式。
+这种文件通常是编译程序源代码得到的结果。
 当\texttt{exec}成功时，它并不会返回到调用者程序；而是开始执行从文件中加载的指令，执行的起点是ELF头中声明的入口点。
-\texttt{exec}有两个参数：包含可执行程序的文件名，和一个字符串参数的数组。
+\texttt{exec}有两个参数：包含可执行程序的文件的名字，和一个字符串参数的数组。
 例如：
 \begin{lstlisting}
     char *argv[3];

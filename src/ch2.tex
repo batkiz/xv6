@@ -79,13 +79,13 @@ Unix接口不是唯一抽象资源的方式，但它被证明是一种非常优�
 
 为了减少内核中错误的风险，OS的设计者们可以最小化在内核态中运行的操作系统代码的数量，并在用户态下执行操作系统的大部分内容。这种内核架构被称为\emph{微内核(micro kernel)}。
 
-\autoref{f1-1}展示了微内核的设计。图中文件系统作为用户级进程运行。以进程的形式运行的OS服务被称为server。为了允许应用和文件server交互，内核会提供一种进程间的通信机制来允许一个用户态的进程向另一个进程发送消息。例如，如果一个应用例如shell想要读写一个文件，它会向文件server发送一条消息然后等待响应。
+\autoref{f2-1}展示了微内核的设计。图中文件系统作为用户级进程运行。以进程的形式运行的OS服务被称为server。为了允许应用和文件server交互，内核会提供一种进程间的通信机制来允许一个用户态的进程向另一个进程发送消息。例如，如果一个应用例如shell想要读写一个文件，它会向文件server发送一条消息然后等待响应。
 
 \begin{figure}[htbp]
     \centering
-    \includegraphics[width=0.8\textwidth]{../imgs/f1-1.png}
+    \includegraphics[width=0.8\textwidth]{../imgs/f2-1.png}
     \caption{有一个文件server的微内核}
-    \label{f1-1}
+    \label{f2-1}
 \end{figure}
 
 在微内核中，内核的接口由一些底层的函数，例如启动应用、发送消息、访问设备硬件等等，组合而成。这种架构会让内核变得相对简单一点，因为操作系统的大部分都在用户态的server中运行。
@@ -99,22 +99,22 @@ Xv6中的隔离单元（和其他Unix操作系统一样）是\emph{进程(proces
 
 Xv6使用页表（由硬件实现）为每个进程提供私有的地址空间。x86的页表把一个\emph{虚拟地址(virtual address)}（x86指令中操作的地址）翻译（或者说“映射”）到一个\emph{物理地址(physical address)}（处理器芯片送到主存的地址）。
 
-Xv6为每个进程维护了一个单独的页表，它定义了进程的地址空间。如\autoref{f1-2}所示，一个地址空间包含了进程的\emph{用户内存(user memory)}，它从虚拟地址0处开始。首先是指令，接是全局变量、然后是栈，最后是一个进程可以按需扩张的“堆”区域（用于malloc）。
+Xv6为每个进程维护了一个单独的页表，它定义了进程的地址空间。如\autoref{f2-2}所示，一个地址空间包含了进程的\emph{用户内存(user memory)}，它从虚拟地址0处开始。首先是指令，接是全局变量、然后是栈，最后是一个进程可以按需扩张的“堆”区域（用于malloc）。
 
 \begin{figure}[htbp]
     \centering
-    \includegraphics[width=0.8\textwidth]{../imgs/f1-2.png}
+    \includegraphics[width=0.8\textwidth]{../imgs/f2-2.png}
     \caption{虚拟地址空间的布局}
-    \label{f1-2}
+    \label{f2-2}
 \end{figure}
 
 每个进程的地址空间都把内核的指令和数据也映射到用户程序的内存中。当一个进程触发一个系统调用时，系统调用会在进程的地址空间的内核映射中执行。这样安排是为了让内核的系统调用代码能直接访问用户内存。为了给用户内存留出充足的空间，xv6的地址空间在高地址处映射内核，从\texttt{0x80100000}开始。
 
 \begin{figure}[htbp]
     \centering
-    \includegraphics[width=0.8\textwidth]{../imgs/f1-3.png}
+    \includegraphics[width=0.8\textwidth]{../imgs/f2-3.png}
     \caption{虚拟地址空间的布局}
-    \label{f1-3}
+    \label{f2-3}
 \end{figure}
 
 Xv6的内核为每个进程维护很多状态，都存储在一个\texttt{struct proc}里（2337）。一个进程中最重要的内核状态是它的页表、内核栈和运行状态。我们将使用记号\texttt{p->xxx}来引用\texttt{proc}结构体的元素。
