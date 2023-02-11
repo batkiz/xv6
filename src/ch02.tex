@@ -134,6 +134,48 @@ xv6和大多数Unix操作系统一样被实现为宏内核。
 因此，xv6内核接口对应操作系统的接口，内核实现了整个操作系统。
 因为xv6并不提供很多服务，所以它的内核比一些微内核还小，但从概念上讲xv6是宏内核。
 
+\section{代码：xv6架构}
+xv6的内核源码在\texttt{kernel/}子目录下。
+源代码按照模块化的粗略概念分为若干文件，\autoref{t2-1}列出了这些文件。
+模块间的接口被定义在\texttt{defs.h}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/defs.h}{(kernel/defs.h)}里。
+
+\begin{table}[htbp]
+    \centering
+    \begin{tabular}{l|l}
+        \textbf{文件}   & \textbf{介绍} \\
+        \hline
+        bio.c       & 文件系统的磁盘块缓存。    \\
+        console.c   & 连接到用户键盘和屏幕。    \\
+        entry.S     & 最早启动的指令。         \\
+        exec.c      & exec()系统调用。        \\
+        file.c       & 文件描述符支持。         \\
+        fs.c        & 文件系统。              \\
+        kalloc.c    & 物理页分配器。           \\
+        kernelvec.S & 处理内核的自陷和计时器中断。  \\
+        log.c       & 文件系统日志和崩溃恢复。   \\
+        main.c      & 控制启动时其他模块的初始化。\\
+        pipe.c      & 管道。                  \\
+        plic.c      & RISC-V中断控制器。       \\
+        printf.c    & 格式化终端的输出。        \\
+        proc.c      & 进程和调度。             \\
+        sleeplock.c & 让出CPU的锁。            \\
+        spinlock.c  & 不让出CPU的锁。           \\
+        start.c     & 机器模式下的启动代码。      \\
+        string.c    & C字符串和字节数组库。       \\
+        swtch.S     & 线程切换。                \\
+        syscall.c   & 把系统调用分发到处理函数。   \\
+        sysfile.c   & 文件相关的系统调用。         \\
+        sysproc.c   & 进程相关的系统调用。        \\
+        trampoline.S& 在用户和内核之间切换的汇编代码。\\
+        trap.c      & 处理自陷和中断并返回的C代码。 \\
+        uart.c      & 串口控制台设备驱动。         \\
+        virtio\_disk.c  & 磁盘设备驱动。          \\
+        vm.c        & 管理页表和地址空间。         \\
+    \end{tabular}
+    \caption{xv6内核源文件。}
+    \label{t2-1}
+\end{table}
+
 \section{进程概览}
 Xv6中的隔离单元（和其他Unix操作系统一样）是\emph{进程(process)}。进程的抽象可以阻止一个进程破坏或者窥探另一个进程的内存、CPU、文件描述符等内容。它还可以防止一个进程破坏内核本身，因此一个进程不可能颠覆内核的隔离机制。内核必须小心实现进程的抽象，因为一个有bug的或者恶意的应用可能会欺骗内核或硬件做一些坏事（例如规避强制隔离）。内核用来实现进程的机制包括用户态/内核态标志、地址空间和线程的时间分片。
 
