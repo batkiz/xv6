@@ -6,7 +6,7 @@
 
 ## 以下为英文原文地址
 
-* [原文地址](https://pdos.csail.mit.edu/6.828/2022/xv6/book-riscv-rev3.pdf)
+* [原文地址](https://pdos.csail.mit.edu/6.828/2018/xv6/book-rev11.pdf)
 
 ## 如何使用本仓库
 
