@@ -337,10 +337,10 @@ xv6 shell以类似上面代码\href{https://github.com/mit-pdos/xv6-riscv/blob/r
 第三，管道允许不同阶段并行执行，而文件的方法需要第一个程序结束之后才能运行第二个。
 
 \section{文件系统}
-xv6文件系统提供数据文件，它们是未解析的字节数组；以及目录，包含指向数据文件和其他目录的名称。
+xv6文件系统提供数据文件，它们是未解析的字节数组；以及目录，它们包含指向数据文件和其他目录的名字。
 目录组成一棵树，从一个称为\emph{根(root)}的特殊目录开始。
 一个\emph{路径(path)}例如\texttt{/a/b/c}指向根目录\texttt{/}下的\texttt{a}目录下的\texttt{b}目录下的一个叫\texttt{c}的文件或者目录。
-不以\texttt{/}开头的路径是相对于调用进程的\emph{当前目录(current directory)}的相对目录，当前目录可以通过\texttt{chdir}系统调用改变。
+不以\texttt{/}开头的路径是相对于调用进程的\emph{当前目录(current directory)}的相对路径，当前目录可以通过\texttt{chdir}系统调用改变。
 下面的两段代码打开同一个文件（假设涉及到的所有目录都存在）：
 \begin{lstlisting}
     chdir("/a");
@@ -360,26 +360,32 @@ xv6文件系统提供数据文件，它们是未解析的字节数组；以及�
     mknod("/console", 1, 1);
 \end{lstlisting}
 
-\texttt{mknod}在文件系统中创建一个文件，但这个文件中没有任何内容。
-这个文件的元数据标识它是一个设备文件并且记录了主设备号和次设备号（\texttt{mknod}的两个参数），内核会将读写设备的\texttt{read}和\texttt{write}系统调用自动转换为设备自身的实现，而不是文件系统的实现。
+\texttt{mknod}在文件系统中创建一个指向一个设备的特殊文件。
+主设备号和次设备号（\texttt{mknod}的两个参数）会被关联到这个设备文件，它们可以唯一标识一个内核设备。
+当进程打开一个设备文件时，内核会把对设备的\texttt{read}和\texttt{write}系统调用自动转换为设备自身的实现，而不是文件系统的实现。
 
-\texttt{fstat}获取一个文件描述符指向的对象的信息。它是一个\texttt{stat.h}中定义的\texttt{struct stat}：
+文件的名字和文件本身是两个东西。
+底层的文件被称为\emph{i节点(inode)}，它可以有多个名字，称为\emph{链接(links)}。
+每个链接组成了目录中的一项；这个目录项里包含了一个文件名和一个指向i节点的引用。
+i节点中保存了文件的\emph{元数据(metadata)}，包括它的类型（文件/目录/设备）、长度、文件内容在磁盘上的位置、这个文件的链接的数量。
+
+\texttt{fstat}系统调用获取一个文件描述符指向的对象的信息。
+它会把结果填充进一个\texttt{struct stat}，这个结构体在\texttt{stat.h}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/stat.h}{(kernel/stat.h)}中被定义为：
 \begin{lstlisting}
     #define T_DIR  1    // 目录
     #define T_FILE 2    // 文件
     #define T_DEF  3    // 设备
 
     struct stat {
-        short type;     // 文件的类型
         int dev;        // 文件系统的磁盘设备
-        uint ino;       // Inode号
+        uint ino;       // i结点号
+        short type;     // 文件的类型
         short nlink;    // 指向这个文件的链接数
-        uint size;      // 文件的大小，单位是字节
+        uint64 size;      // 文件的大小，单位是字节
     };
 \end{lstlisting}
 
-一个文件的名字和文件自身是不同的；同一个底层文件（称为一个\emph{i节点(inode)}）可以有多个名字（称为\emph{链接(link)}）。
-\texttt{link}系统调用创建另一个指向同一个inode的文件系统名。
+\texttt{link}系统调用创建另一个指向同一个i节点的文件系统名。
 这个片段创建了一个新的文件，名字既是\texttt{a}又是\texttt{b}。
 
 \begin{lstlisting}
@@ -389,7 +395,7 @@ xv6文件系统提供数据文件，它们是未解析的字节数组；以及�
 
 读写\texttt{a}和读写\texttt{b}是一样的。
 每一个i节点都由一个独一无二的\emph{i节点号(inode number)}标识。
-在上面的代码片段之后，可以通过检查\texttt{fstat}的返回值来判断\texttt{a}和\texttt{b}指向相同的底层文件：它们会返回相同的i节点号(\texttt{ino})，\texttt{nlink}将会是2。
+在上面的代码片段之后，可以通过检查\texttt{fstat}的返回值来判断\texttt{a}和\texttt{b}指向相同的底层文件：它们会返回相同的i节点号（\texttt{ino}），\texttt{nlink}将会是2。
 
 \texttt{unlink}系统调用从文件系统中移除一个名字。
 只有当文件的链接数变为0并且没有文件描述符指向它时，文件的i节点和保存内容的磁盘空间才会被释放。
@@ -405,11 +411,11 @@ xv6文件系统提供数据文件，它们是未解析的字节数组；以及�
 \end{lstlisting}
 是一种惯用的创建临时i节点的方法，当进程关闭\texttt{fd}或者退出时这个i节点就会被清除。
 
-文件系统操作的shell命令被实现为用户级的程序，例如\texttt{mkdir, ln, rm}等。
+Uinx提供的文件系统操作的shell命令被实现为用户级的程序，例如\texttt{mkdir}、\texttt{ln}、\texttt{rm}等。
 这个设计允许任何人通过添加新的用户级程序来扩展shell支持新的用户命令。
 事后看来，这个设计看起来非常明显，但当时和Unix同时期的其他系统的设计通常都是把这些命令内置在shell中（并且把shell内置在内核中）。
 
-一个例外是\texttt{cd}，它被内置在shell中(8716)。
+一个例外是\texttt{cd}，它被内置在shell中\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L161}{(user/sh.c:161)}。
 \texttt{cd}必须改变shell自身的当前工作目录。
 如果\texttt{cd}作为普通的命令运行，那么shell会fork一个子进程，子进程会运行\texttt{cd}，然后\texttt{cd}会改变\emph{子进程}的工作目录。
 父进程（即shell）的工作目录并不会改变。
