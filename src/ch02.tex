@@ -137,7 +137,7 @@ xv6和大多数Unix操作系统一样被实现为宏内核。
 \section{代码：xv6架构}
 xv6的内核源码在\texttt{kernel/}子目录下。
 源代码按照模块化的粗略概念分为若干文件，\autoref{t2-1}列出了这些文件。
-模块间的接口被定义在\texttt{defs.h}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/defs.h}{(kernel/defs.h)}里。
+模块间的接口被定义在\texttt{defs.h}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv/kernel/defs.h}{(kernel/defs.h)}里。
 
 \begin{table}[htbp]
     \centering
@@ -194,7 +194,7 @@ xv6为每个进程维护了一个单独的页表，它定义了进程的地址�
 如\autoref{f2-2}所示，一个地址空间包含了进程的\emph{用户内存(user memory)}，它从虚拟地址0处开始。
 首先是指令，接是全局变量、然后是栈，最后是一个进程可以按需扩张的“堆”区域（用于malloc）。
 有好几个限制进程地址空间最大值的因素：RISC-V的指针是64位的，当在页表中查找虚拟地址时硬件只使用低39位，xv6只用到了其中的38位。
-因此，最大的地址是$2^{38} - 1$ = 0x3fffffffff，即\texttt{MAXVA}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/riscv.h#L363}{(kernel/riscv.h:363)}。
+因此，最大的地址是$2^{38} - 1$ = 0x3fffffffff，即\texttt{MAXVA}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv/kernel/riscv.h#L363}{(kernel/riscv.h:363)}。
 在地址空间的顶部，xv6保留了一页用于\emph{trampoline}、一页用于映射进程的\emph{trapframe}。
 xv6使用这两个页来过渡到内核并返回；trampoline页包含进入和离开内核的代码，映射进程的trapframe也是保存/恢复用户进程的状态所必需的，我们将在\autoref{ch04}中解释。
 
@@ -205,7 +205,7 @@ xv6使用这两个页来过渡到内核并返回；trampoline页包含进入和�
     \label{f2-2}
 \end{figure}
 
-xv6的内核为每个进程维护很多状态，都存储在一个\texttt{struct proc}里\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/proc.h#L85}{(kernel/proc.h:85)}。
+xv6的内核为每个进程维护很多状态，都存储在一个\texttt{struct proc}里\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv/kernel/proc.h#L85}{(kernel/proc.h:85)}。
 一个进程中最重要的内核状态是它的页表、内核栈和运行状态。
 我们将使用记号\texttt{p->xxx}来引用\texttt{proc}结构体的元素，例如，\texttt{p->pagetable}是进程页表的一个指针。
 
@@ -235,7 +235,42 @@ xv6的内核为每个进程维护很多状态，都存储在一个\texttt{struct
 在xv6中，进程由一个地址空间和一个线程组成。
 在真实的操作系统中，一个进程可能有不止一个线程以充分利用多个CPU。
 
-\section{代码：第一个地址空间}
-为了让xv6的架构更加具体，我们将看一下内核如何创建第一个地址空间（它自己的地址空间）、如何创建并启动第一个进程、以及这个进程如何进行第一个系统调用。通过追踪这些操作我们可以详细地看到xv6如何为进程提供强隔离性。提供强隔离性的第一步是设置内核运行在它自己的地址空间。
+\section{代码：开始xv6，第一个进程和系统调用}
+为了让xv6更加具体，我们将总结一下内核如何启动并运行第一个进程。
+后续的章节会详细介绍这部分概览中展示的机制。
 
-当一台电脑启动时，它会初始化自己并从硬盘中加载一个\emph{boot loader}然后执行它。附录B解释了详情。xv6的boot loader从硬盘中加载xb6内核并在\emph{entry}
+当RISC-V电脑启动时，它会初始化自己运行一个存储在ROM（只读内存）中的boot loader（引导加载程序）。
+
+boot loader把xv6内核加载进内存。
+然后，在机器模式下，CPU从\texttt{\_entry}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv/kernel/entry.S#L7}{(kernel/entry.S:7)}开始执行xv6。
+RISC-V刚启动时分页硬件是禁用的：此时虚拟地址直接映射到物理地址。
+
+loader把xv6内核加载到内存的物理地址\texttt{0x80000000}处。
+之所以把内核放在\texttt{0x80000000}而不是\texttt{0x0}是因为\texttt{0x0 : 0x80000000}地址范围内包含了I/O设备。
+
+\texttt{\_entry}处的指令设置了一个栈，因此xv6可以运行C代码。
+xv6为文件\texttt{start.c}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv/kernel/start.c#L11}{(kernel/start.c:11)}中的初始栈\texttt{stack0}声明了空间。
+\texttt{\_entry}处的代码把地址\texttt{stack0+4096}存入栈指针寄存器\texttt{sp}，这个地址是栈顶，因为RISC-V的栈是从高往低增长的。
+既然内核已经有了栈，那么\texttt{\_entry}会调用\texttt{start}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv/kernel/start.c#L21}{(kernel/start.c:21)}进入C代码。
+
+函数\texttt{start}会进行一些只在机器模式下允许的配置，然后切换到管理模式。
+为了进入管理模式，RISC-V提供了\texttt{mret}指令。
+这个指令最常用于从一个从管理模式到机器模式的调用返回。
+\texttt{start}并不是从这样一个调用返回，而是进行设置来伪装一个这样的调用：它在寄存器\texttt{mstatus}中把之前的特权模式设置为管理模式，通过把\texttt{main}的地址写入寄存器\texttt{mepc}来把返回地址设置为\texttt{main}，通过把\texttt{0}写入页表寄存器\texttt{satp}来禁用管理模式的虚拟地址翻译，并将所有中断和异常委托给管理模式。
+
+在跳转到管理模式之前，\texttt{start}还执行了另一项任务：它编程时钟芯片以生成计时器中断。
+在准备好这些后，\texttt{start}通过调用\texttt{mret}“返回”到管理模式。
+这会导致程序计数器变为\texttt{main}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/main.c#L11}{(kernel/main.c:11)}。
+
+在\texttt{main}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/main.c#L11}{(kernel/main.c:11)}初始化几个设备和子系统后，它通过调用\texttt{userinit}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/proc.c#L233}{(kernel/proc.c:233)}创建第一个进程。
+第一个进程会执行一个用RISC-V汇编所写的小程序，它会进行xv6中的第一个系统调用。
+\texttt{initcode.S}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/user/initcode.S#L3}{(user/initcode.S:3)}把\texttt{exec}系统调用\texttt{SYS\_EXEC}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/syscall.h#L8}{(kernel/syscall.h:8)}的序号存入寄存器\texttt{a7}，然后执行\texttt{ecall}指令重新进入内核。
+
+在\texttt{syscall}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/syscall.c#L132}{(kernel/syscall.c:132)}函数中内核使用寄存器\texttt{a7}中存储的数字来调用期望的系统调用。
+系统调用表\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/syscall.c#L107}{(kernel/syscall.c:107)}把\texttt{SYS\_EXEC}映射为\texttt{sys\_exec}，后者就是内核真正调用的函数。
+正如我们在\autoref{ch01}中所说，\texttt{exec}会用一个新程序（这个例子中是\texttt{/init}）替换当前进程的内存和寄存器。
+
+一旦内核完成了\texttt{exec}，它会返回到\texttt{/init}进程的用户空间。
+\texttt{init}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/user/init.c#L15}{(user/init.c:15)}会按需创建一个新的控制台设备文件，然后把它打开为文件描述符0、1、2。
+然后它会在控制台中启动一个shell。
+此时系统已经就绪。

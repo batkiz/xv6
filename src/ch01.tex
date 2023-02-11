@@ -83,7 +83,7 @@ shell是一个读取用户的命令然后执行它们的普通程序。
 这一事实展示了系统调用接口的强大：shell并没有什么特殊的地方。
 这也意味着shell可以很容易的替换；因此，现代Unix系统有很多shell可以选择，每一个都有自己的用户借口和脚本特性。
 xv6的shell是Unix Bourne Shell的基础部分的一个简单实现。
-它的实现可以在\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L1}{(user/sh.c:1)}找到。
+它的实现可以在\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv/user/sh.c#L1}{(user/sh.c:1)}找到。
 
 \section{处理器和内存}
 
@@ -155,15 +155,15 @@ xv6使用ELF格式，\autoref{ch03}中将会详细介绍这种格式。
 这个片段将调用者程序替换为\texttt{/bin/echo}程序的实例，并以\texttt{echo hello}作为参数列表。
 大多数程序会忽略第一个参数，按照惯例它是程序的名称。
 
-xv6 shell使用上面的调用来代替用户运行程序。shell的主要架构很简单，见\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L146}{(usr/sh.c:146)}。
+xv6 shell使用上面的调用来代替用户运行程序。shell的主要架构很简单，见\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv/user/sh.c#L146}{(usr/sh.c:146)}。
 主循环使用\texttt{getcmd}读取用户的一行输入。
 然后它调用\texttt{fork}，创建一个shell进程的拷贝。
 父进程调用\texttt{wait}，而子进程运行读入的命令。
 例如，如果用户向shell输入了“\texttt{echo hello}”，\texttt{runcmd}将会以“\texttt{echo hello}”为参数被调用。
-\texttt{runcmd}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L55}{(user/sh.c:55)}运行实际的命令。
-对于“\texttt{echo hello}”，它会调用\texttt{exec}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L79}{(user/sh.c:79)}。
+\texttt{runcmd}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv/user/sh.c#L55}{(user/sh.c:55)}运行实际的命令。
+对于“\texttt{echo hello}”，它会调用\texttt{exec}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv/user/sh.c#L79}{(user/sh.c:79)}。
 如果\texttt{exec}成功，那么子进程会执行来自\texttt{echo}的指令而不是\texttt{runcmd}。
-在某个时间点\texttt{echo}会调用\texttt{exit}，这导致父进程从\texttt{main}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L146}{(user/sh.c:146)}中的\texttt{wait}返回。
+在某个时间点\texttt{echo}会调用\texttt{exit}，这导致父进程从\texttt{main}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv/user/sh.c#L146}{(user/sh.c:146)}中的\texttt{wait}返回。
 
 你可能想知道为什么\texttt{fork}和\texttt{exec}不被合并成单个系统调用；我们稍后将会看到shell在实现I/O重定向时就利用了这种分离机制。如果创建一个复制进程之后立即替换它（使用\texttt{exec}）会导致浪费，为了避免这种浪费，内核会通过使用虚拟内存技术例如写时复制（见\autoref{s4-6}）来优化\texttt{fork}的实现。
 
@@ -179,7 +179,7 @@ xv6隐式分配大多数用户空间的内存：\texttt{fork}会为子进程分�
 在内部，xv6内核使用文件描述符作为每个进程表的索引，这样每一个进程都有一个从0开始的文件描述符的私有空间。\footnote{todo！}
 按照惯例，一个进程从文件描述符0（标准输入）读取输入，把输出写入到文件描述符1（标准输出），把错误消息写入到文件描述符2（标准错误）。
 正如我们将看到的，shell利用这些惯例来实现I/O重定向和管道。
-shell保证它总是至少有三个文件描述符是打开的\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L152}{(user/sh.c:152)}，它们是控制台的默认文件描述符。
+shell保证它总是至少有三个文件描述符是打开的\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/user/sh.c#L152}{(user/sh.c:152)}，它们是控制台的默认文件描述符。
 
 \texttt{read}和\texttt{write}系统调用从文件描述符指定的文件中读取或写入字节。
 \texttt{read(fd, buf, n)}调用从文件描述符\texttt{fd}中读取最多\texttt{n}个字节，拷贝到\texttt{buf}中，然后返回读取到的字节数。
@@ -239,10 +239,10 @@ shell保证它总是至少有三个文件描述符是打开的\href{https://gith
 然后\texttt{cat}执行时，文件描述符0（标准输入）就指向\texttt{input.txt}。
 父进程的文件描述符并没有改变，因为这段代码只更改了子进程的描述符。
 
-xv6 shell中I/O重定向的代码就是用这种方式工作的\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L83}{(user/sh.c:83)}。
+xv6 shell中I/O重定向的代码就是用这种方式工作的\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/user/sh.c#L83}{(user/sh.c:83)}。
 当代码执行到这个位置时，shell已经fork好了子进程，\texttt{runcmd}即将调用\texttt{exec}加载新程序。
 
-\texttt{open}的第二个参数由一系列的位标记组成，它们负责控制\texttt{open}的行为。可能的值定义在文件控制头文件\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/fcntl.h#L1-L5}{(kernel/fcntl.h:1-5)}中：\texttt{O\_RDONLY}、\texttt{O\_WRONLY}，\texttt{O\_RDWR}，\texttt{O\_CREATE}，\texttt{O\_TRUNC}分别指示\texttt{open}打开一个只读、只写、可以读和写、不存在时创建、把内容缩短到0的文件。
+\texttt{open}的第二个参数由一系列的位标记组成，它们负责控制\texttt{open}的行为。可能的值定义在文件控制头文件\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/fcntl.h#L1-L5}{(kernel/fcntl.h:1-5)}中：\texttt{O\_RDONLY}、\texttt{O\_WRONLY}，\texttt{O\_RDWR}，\texttt{O\_CREATE}，\texttt{O\_TRUNC}分别指示\texttt{open}打开一个只读、只写、可以读和写、不存在时创建、把内容缩短到0的文件。
 
 现在应该很清楚为什么说分离\texttt{fork}和\texttt{exec}是一个很聪明的设计了：在这两个调用中间，shell有机会重定向子进程的I/O而不会干扰主shell的I/O设置。
 可以想象一下，假设真的存在一个组合的\texttt{forkexec}系统调用，但用这样一个调用进行I/O重定向会很尴尬。
@@ -315,7 +315,7 @@ xv6 shell不支持错误文件描述符的I/O重定向，但现在你知道了�
 如果没有数据可用，对管道的\texttt{read}调用会等待有数据被写入到管道或者所有指向管道写入端的文件描述符都已经被关闭；在后面这种情况下，\texttt{read}会返回0，就像是读取到普通文件的末尾一样。
 \texttt{read}会阻塞直到有新的数据到达也是子进程运行\texttt{wc}之前先把管道的写入端关闭的一个原因：如果\texttt{wc}的一个文件描述符指向管道的写入端，那么\texttt{wc}将永远不会看到文件结束符。
 
-xv6 shell以类似上面代码\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L101}{(user/sh.c:101)}的方式实现了管道符(\texttt{|})例如\texttt{grep fork sh.c | wc -l}。
+xv6 shell以类似上面代码\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/user/sh.c#L101}{(user/sh.c:101)}的方式实现了管道符(\texttt{|})例如\texttt{grep fork sh.c | wc -l}。
 子进程首先创建一个管道来连接管道符的左侧和右侧。
 然后它为左侧和右侧都调用\texttt{fork}和\texttt{runcmd}，然后等待两侧都结束。
 管道符的右侧可能是一个包含管道的命令（例如，\texttt{a | b | c}），这时它自己还会fork两个新的子进程（一个运行\texttt{b}，一个运行\texttt{c}）。
@@ -371,7 +371,7 @@ xv6文件系统提供数据文件，它们是未解析的字节数组；以及�
 i节点中保存了文件的\emph{元数据(metadata)}，包括它的类型（文件/目录/设备）、长度、文件内容在磁盘上的位置、这个文件的链接的数量。
 
 \texttt{fstat}系统调用获取一个文件描述符指向的对象的信息。
-它会把结果填充进一个\texttt{struct stat}，这个结构体在\texttt{stat.h}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/stat.h}{(kernel/stat.h)}中被定义为：
+它会把结果填充进一个\texttt{struct stat}，这个结构体在\texttt{stat.h}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/stat.h}{(kernel/stat.h)}中被定义为：
 \begin{lstlisting}
     #define T_DIR  1    // 目录
     #define T_FILE 2    // 文件
@@ -416,7 +416,7 @@ Uinx提供的文件系统操作的shell命令被实现为用户级的程序，�
 这个设计允许任何人通过添加新的用户级程序来扩展shell支持新的用户命令。
 事后看来，这个设计看起来非常明显，但当时和Unix同时期的其他系统的设计通常都是把这些命令内置在shell中（并且把shell内置在内核中）。
 
-一个例外是\texttt{cd}，它被内置在shell中\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L161}{(user/sh.c:161)}。
+一个例外是\texttt{cd}，它被内置在shell中\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/user/sh.c#L161}{(user/sh.c:161)}。
 \texttt{cd}必须改变shell自身的当前工作目录。
 如果\texttt{cd}作为普通的命令运行，那么shell会fork一个子进程，子进程会运行\texttt{cd}，然后\texttt{cd}会改变\emph{子进程}的工作目录。
 父进程（即shell）的工作目录并不会改变。
