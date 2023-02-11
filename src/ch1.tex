@@ -82,7 +82,7 @@ shell是一个读取用户的命令然后执行它们的普通程序。
 这一事实展示了系统调用接口的强大：shell并没有什么特殊的地方。
 这也意味着shell可以很容易的替换；因此，现代Unix系统有很多shell可以选择，每一个都有自己的用户借口和脚本特性。
 xv6的shell是Unix Bourne Shell的基础部分的一个简单实现。
-它的实现可以在行\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L1}{user/sh.c:1}找到。
+它的实现可以在\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L1}{(user/sh.c:1)}找到。
 
 \section{处理器和内存}
 
@@ -154,21 +154,20 @@ xv6使用ELF格式，\autoref{ch03}中将会详细介绍这种格式。
 这个片段将调用者程序替换为\texttt{/bin/echo}程序的实例，并以\texttt{echo hello}作为参数列表。
 大多数程序会忽略第一个参数，按照惯例它是程序的名称。
 
-xv6 shell使用上面的调用来代替用户运行程序。shell的主要架构很简单，见\texttt{main}(8701)。
+xv6 shell使用上面的调用来代替用户运行程序。shell的主要架构很简单，见\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L146}{(usr/sh.c:146)}。
 主循环使用\texttt{getcmd}读取用户的一行输入。
 然后它调用\texttt{fork}，创建一个shell进程的拷贝。
 父进程调用\texttt{wait}，而子进程运行读入的命令。
 例如，如果用户向shell输入了“\texttt{echo hello}”，\texttt{runcmd}将会以“\texttt{echo hello}”为参数被调用。
-\texttt{runcmd}(8606)运行实际的命令。
-对于“\texttt{echo hello}”，它会调用\texttt{exec}(8626)。
+\texttt{runcmd}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L55}{(user/sh.c:55)}运行实际的命令。
+对于“\texttt{echo hello}”，它会调用\texttt{exec}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L79}{(user/sh.c:79)}。
 如果\texttt{exec}成功，那么子进程会执行来自\texttt{echo}的指令而不是\texttt{runcmd}。
-在某个时间点\texttt{echo}会调用\texttt{exit}，这导致父进程从\texttt{main}(8701)中的\texttt{wait}返回。
-你可能想知道为什么\texttt{fork}和\texttt{exec}不被合并成单个系统调用；我们稍后将会看到把创建进程和加载程序分离是一个聪明的设计。
+在某个时间点\texttt{echo}会调用\texttt{exit}，这导致父进程从\texttt{main}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L146}{(user/sh.c:146)}中的\texttt{wait}返回。
+
+你可能想知道为什么\texttt{fork}和\texttt{exec}不被合并成单个系统调用；我们稍后将会看到shell在实现I/O重定向时就利用了这种分离机制。如果创建一个复制进程之后立即替换它（使用\texttt{exec}）会导致浪费，为了避免这种浪费，内核会通过使用虚拟内存技术例如写时复制（见\autoref{s4.6}）来优化\texttt{fork}的实现。
 
 xv6隐式分配大多数用户空间的内存：\texttt{fork}会为子进程分配内存来存储父进程内存的拷贝，\texttt{exec}会分配足够的内存来存储可执行文件。
 一个进程如果在运行时需要更多的内存（可能是调用了\texttt{malloc}），可以调用\texttt{sbrk(n)}来把它的数据内存增大\texttt{n}个字节；\texttt{sbrk}返回新的内存的位置。
-
-xv6不提供用户的概念、没有保护一个用户的文件不会被另一个用户修改的机制；用Unix术语来说就是，所有xv6进程都以root身份运行。
 
 \section{I/O和文件描述符}
 
