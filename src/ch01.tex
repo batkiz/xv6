@@ -164,7 +164,7 @@ xv6 shell使用上面的调用来代替用户运行程序。shell的主要架构
 如果\texttt{exec}成功，那么子进程会执行来自\texttt{echo}的指令而不是\texttt{runcmd}。
 在某个时间点\texttt{echo}会调用\texttt{exit}，这导致父进程从\texttt{main}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L146}{(user/sh.c:146)}中的\texttt{wait}返回。
 
-你可能想知道为什么\texttt{fork}和\texttt{exec}不被合并成单个系统调用；我们稍后将会看到shell在实现I/O重定向时就利用了这种分离机制。如果创建一个复制进程之后立即替换它（使用\texttt{exec}）会导致浪费，为了避免这种浪费，内核会通过使用虚拟内存技术例如写时复制（见\autoref{s4.6}）来优化\texttt{fork}的实现。
+你可能想知道为什么\texttt{fork}和\texttt{exec}不被合并成单个系统调用；我们稍后将会看到shell在实现I/O重定向时就利用了这种分离机制。如果创建一个复制进程之后立即替换它（使用\texttt{exec}）会导致浪费，为了避免这种浪费，内核会通过使用虚拟内存技术例如写时复制（见\autoref{s4-6}）来优化\texttt{fork}的实现。
 
 xv6隐式分配大多数用户空间的内存：\texttt{fork}会为子进程分配内存来存储父进程内存的拷贝，\texttt{exec}会分配足够的内存来存储可执行文件。
 一个进程如果在运行时需要更多的内存（可能是调用了\texttt{malloc}），可以调用\texttt{sbrk(n)}来把它的数据内存增大\texttt{n}个字节；\texttt{sbrk}返回新的内存的位置。
