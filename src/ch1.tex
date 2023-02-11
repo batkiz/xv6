@@ -173,12 +173,12 @@ xv6隐式分配大多数用户空间的内存：\texttt{fork}会为子进程分�
 
 \emph{文件描述符(file descriptor)}是一个小整数，它表示一种由内核管理的对象，这种对象可能被一个进程读取或写入。
 一个进程可以通过打开文件、目录、设备，创建管道，复制现有描述符来获得一个文件描述符。
-为了简单，我们通常将文件描述符指向的对象称为“文件”；文件描述符接口对不同的文件、管道、设备进行了抽象，让它们看起来都像是字节流。
+为了简单，我们通常将文件描述符指向的对象称为“文件”；文件描述符接口对不同的文件、管道、设备进行了抽象，让它们看起来都像是字节流。我们将用\emph{I/O}来指代输入和输出。
 
 在内部，xv6内核使用文件描述符作为每个进程表的索引，这样每一个进程都有一个从0开始的文件描述符的私有空间。\footnote{todo！}
 按照惯例，一个进程从文件描述符0（标准输入）读取输入，把输出写入到文件描述符1（标准输出），把错误消息写入到文件描述符2（标准错误）。
 正如我们将看到的，shell利用这些惯例来实现I/O重定向和管道。
-shell保证它总是至少有三个文件描述符是打开的(8707)，默认情况下就是控制台的文件描述符。
+shell保证它总是至少有三个文件描述符是打开的\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L152}{(user/sh.c:152)}，它们是控制台的默认文件描述符。
 
 \texttt{read}和\texttt{write}系统调用从文件描述符指定的文件中读取或写入字节。
 \texttt{read(fd, buf, n)}调用从文件描述符\texttt{fd}中读取最多\texttt{n}个字节，拷贝到\texttt{buf}中，然后返回读取到的字节数。
@@ -200,18 +200,18 @@ shell保证它总是至少有三个文件描述符是打开的(8707)，默认情
             break;
         if (n < 0) {
             fprintf(2, "read error\n");
-            exit();
+            exit(1);
         }
         if (write(1, buf, n) != n) {
             fprintf(2, "write error\n");
-            exit();
+            exit(1);
         }
     }
 \end{lstlisting}
 
 这个代码片段中需要注意的一点是\texttt{cat}并不知道它是从一个文件、控制台还是管道中读取。
 类似的，\text{cat}也不知道它是打印到控制台、文件还是别的什么。
-文件描述符的使用和文件描述符0是输入、文件描述符1是输出的约定让我们有了一个\texttt{cat}的简单实现。
+文件描述符的使用和文件描述符0是输入、文件描述符1是输出的约定让我们可以简单地实现一个\texttt{cat}。
 
 \texttt{close}系统调用释放一个文件描述符，让它可以被后续的\texttt{open}、\texttt{pipe}或\texttt{dup}系统调用重用。
 一个新分配的文件描述符总是当前进程未使用的序号最小的描述符。
@@ -219,7 +219,7 @@ shell保证它总是至少有三个文件描述符是打开的(8707)，默认情
 文件描述符和\texttt{fork}交互可以很容易地实现I/O重定向。
 \texttt{fork}拷贝父进程的文件描述符表和它的内存，因此子进程开始时打开的文件和父进程完全相同。
 系统调用\texttt{exec}替换调用者进程的内存但保留它的文件描述符表。
-这允许shell通过fork、重新打开选定的文件描述符、然后执行新程序来实现I/O重定向。
+这允许shell通过fork、在子进程中重新打开选定的文件描述符、然后调用\texttt{exec}执行新程序来实现\emph{I/O重定向(I/O redirection)}。
 这里有一个当shell运行命令\texttt{cat < input.txt}时会执行的代码的简单版本：
 
 \begin{lstlisting}
@@ -235,16 +235,17 @@ shell保证它总是至少有三个文件描述符是打开的(8707)，默认情
 \end{lstlisting}
 
 子进程关闭了文件描述符0之后，\texttt{open}会保证让新打开的\texttt{input.txt}使用文件描述符0：0是最小的可用文件描述符。
-然后\texttt{cat}执行时，文件描述符\texttt{0}（标准输入）就指向\texttt{input.txt}。
+然后\texttt{cat}执行时，文件描述符0（标准输入）就指向\texttt{input.txt}。
+父进程的文件描述符并没有改变，因为这段代码只更改了子进程的描述符。
 
-xv6 shell中I/O重定向的代码就是用这种方式工作的(8630)。
-回想之前shell已经克隆好子进程，\\
-\texttt{runcmd}即将调用\texttt{exec}加载新程序。\footnote{todo！}
-现在应该很清楚为什么说分离\texttt{fork}和\texttt{exec}是一个很聪明的设计了。
-因为如果它们是分离的，shell可以fork一个子进程，然后在子进程中使用\texttt{open}、\texttt{close}、\texttt{dup}来改变标准输入和输出文件描述符，然后再调用\texttt{exec}。
+xv6 shell中I/O重定向的代码就是用这种方式工作的\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/sh.c#L83}{(user/sh.c:83)}。
+当代码执行到这个位置时，shell已经fork好了子进程，\texttt{runcmd}即将调用\texttt{exec}加载新程序。
 
-最后exec的程序（我们的例子中是cat）不需要做任何的修改。
-如果\texttt{fork}和\texttt{exec}被组合成单个系统调用，那么shell需要一些其他（可能更复杂）的方案来重定向输入和输出，或者程序自身必须知道如何重定向输入输出。
+\texttt{open}的第二个参数由一系列的位标记组成，它们负责控制\texttt{open}的行为。可能的值定义在文件控制头文件\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/fcntl.h#L1-L5}{(kernel/fcntl.h:1-5)}中：\texttt{O\_RDONLY}、\texttt{O\_WRONLY}，\texttt{O\_RDWR}，\texttt{O\_CREATE}，\texttt{O\_TRUNC}分别指示\texttt{open}打开一个只读、只写、可以读和写、不存在时创建、把内容缩短到0的文件。
+
+现在应该很清楚为什么说分离\texttt{fork}和\texttt{exec}是一个很聪明的设计了：在这两个调用中间，shell有机会重定向子进程的I/O而不会干扰主shell的I/O设置。
+可以想象一下，假设真的存在一个组合的\texttt{forkexec}系统调用，但用这样一个调用进行I/O重定向会很尴尬。
+shell需要在调用\texttt{forkex}之前修改它自己的I/O设置（然后撤销这些更改）；或者\texttt{forkexec}可以把I/O重定向的要求当做一个新的参数；或者可以让每个像\texttt{cat}这样的程序自己负责进行自己的I/O重定向。
 
 尽管\texttt{fork}会拷贝文件描述符表，但每一个底层的文件偏移量会被父进程和子进程共享。考虑这个例子：
 \begin{lstlisting}
@@ -257,7 +258,7 @@ xv6 shell中I/O重定向的代码就是用这种方式工作的(8630)。
     }
 \end{lstlisting}
 在这个片段的末尾，文件描述符1指向的文件将包含数据\texttt{hello world}。
-父进程的\texttt{write}（因为\texttt{wait}调用，一定会在子进程完成后才会调用）会在子进程的\texttt{write}写入的位置之后写入。
+父进程的\texttt{write}（因为有\texttt{wait}调用，所以一定会在子进程完成后才会被调用）会在子进程的\texttt{write}写入的位置之后写入。
 这个行为可以让一个shell命令的序列的输出保持有序，例如\texttt{(echo hello; echo world) > output.txt}。
 
 \texttt{dup}系统调用会复制一个现有的文件描述符，返回一个新的文件描述符，但是指向同一个底层的I/O对象。
@@ -269,7 +270,7 @@ xv6 shell中I/O重定向的代码就是用这种方式工作的(8630)。
     write(fd, "world\n", 6);
 \end{lstlisting}
 
-如果两个文件描述符通过\texttt{fork}和\texttt{dup}调用从同一个原始文件描述符派生，那么它们将共享同一个的偏移量。
+如果两个文件描述符通过\texttt{fork}和\texttt{dup}调用从同一个原始文件描述符派生，那么它们将共享偏移量。
 否则文件描述符不会共享偏移量，即使它们是使用\texttt{open}调用打开的同一个文件。
 \texttt{dup}允许shell实现类似这样的命令：\texttt{ls existing-file non-existing-file > tmp1 2>\&1}。\texttt{2>\&1}告诉shell文件描述符2是文件描述符1的复制。
 存在的文件的文件名和不存在的文件导致的错误信息都会被输出到文件\texttt{tmp1}中。
