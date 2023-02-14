@@ -64,7 +64,7 @@ $2^{56}$的物理地址空间在不久的未来都足够容纳很多I/O设备和
 \texttt{PTE\_X}控制指令是否可以把页的内容解释为指令并执行它们。
 \texttt{PTE\_U}控制用户模式下的指令是否可以访问该页；如果\texttt{PTE\_U}未被设置，该PTE只能在管理模式下使用。
 \autoref{f3-2}展示了所有这些位的含义。
-这些标记和所有其他分页硬件相关的结构体定义在\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/riscv.h}{(kernel/riscv.h)}。
+这些标记和所有其他分页硬件相关的结构体定义在\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/riscv.h}{(kernel/riscv.h)}。
 
 为了让CPU使用页表，内核必须把根页表的物理地址写入\texttt{satp}寄存器。
 执行后续的指令时CPU会使用\texttt{satp}指向的页表来翻译所有的地址。
@@ -119,4 +119,48 @@ QEMU以\emph{内存映射(memory-mapped)}控制寄存器的方式把硬件接口
 保护页的映射是无效映射。
 
 \section{代码：创建一个地址空间}
+xv6中大部分操作地址空间和页表的代码都在\texttt{vm.c}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/vm.c#L1}{(kernel/vm.c:1)}中。
+其中最主要的数据结构是\texttt{pagetable\_t}，它其实是一个指向RISC-V根页表的指针；\texttt{pagetable\_t}要么是内核的页表，要么是进程的页表。
+最主要的函数是\texttt{walk}和\texttt{mappages}：\texttt{walk}查找一个虚拟地址对应的PTE，\texttt{mappages}为新的映射添加PTE。
+以\texttt{kvm}开头的函数操作内核页表，以\texttt{uvm}开头的函数操作用户页表，其他的函数同时用于两者。
+\texttt{copyout}把数据拷贝到用户虚拟地址，\texttt{copyin}相反，地址作为系统调用的参数提供。
+它们都在\texttt{vm.c}里，因为它们需要显式地翻译这些地址以找到相应的物理内存。
+
+在启动的早期，\texttt{main}会调用\texttt{kvminit}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/vm.c#L54}{(kernel/vm.c:54)}，这个函数会使用\texttt{kvmmake}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/vm.c#L20}{(kernel/vm.c:20)}创建内核的页表。
+这次调用在xv6启用RISC-V的分页功能之前执行，因此其中的地址都直接是物理地址。
+\texttt{kvmmake}首先分配一个物理内存页来存储根页表。
+然后它调用\texttt{kvmmap}来添加内核翻译地址时需要的映射。
+这些映射包括内核的指令和数据、至多到\texttt{PHYSTOP}的物理内存、以及实际上是设备的内存范围。
+\texttt{proc\_mapstacks}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/proc.c#L33}{(kernel/proc.c:33)}为每个进程分配一个内核栈。
+它会调用\texttt{kvmmap}把每个栈映射到\texttt{KSTACK}生成的虚拟地址，以为无效的保护页留出空间。
+
+\texttt{kvmmap}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/vm.c#L132}{(kernel/vm.c:132)}会调用\texttt{mappages}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/vm.c#L143}{(kernel/vm.c:143)}，它把一系列从虚拟地址到物理地址的映射加入到页表中。
+
+\texttt{walk}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/vm.c#L86}{(kernel/vm.c:86)}模仿RISC-V的分页硬件查找虚拟地址的PTE的过程（见\autoref{f3-2}）。
+\texttt{walk}每次用9位逐次查找3级页表。
+它使用虚拟地址的每9位去查找下一级页表或者最终目标页的PTE\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/vm.c#L92}{(kernel/vm.c:92)}。
+如果PTE无效，说明请求的页面还没有被分配，如果\texttt{alloc}参数为真，\texttt{walk}会分配一个新的页并把它的物理地址加进PTE里。
+它返回树的最底层的PTE的地址\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/vm.c#L102}{(kernel/vm.c:102)}。
+
+上面的代码依赖于物理内存被直接映射到内核的虚拟地址空间。
+例如，\texttt{walk}逐级查询页表时，它从PTE中获取下一级页表的（物理）地址\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/vm.c#L94}{(kernel/vm.c:94)}，然后把它当做一个虚拟地址来获取下一级页表中的PTE\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/vm.c#L92}{(kernel/vm.c:92)}。
+
+\texttt{main}调用\texttt{kvminithart}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/vm.c#L62}{(kernel/vm.c:62)}来安装页表。
+它把根页表的物理地址存入\texttt{satp}寄存器。
+之后CPU就会使用内核的页表翻译所有的地址。
+因为内核使用了直接映射，现在下一条指令的虚拟地址将会映射到正确的物理内存地址。
+
+每一个RISC-V CPU都会页表项缓存到\emph{翻译查找缓冲区(Translation Look-aside Buffer, TLB)}中，所以当xv6修改一个页表时，它必须告诉CPU把相应的缓存的TLB条目无效化。
+如果不这么做，之后TLB可能会使用旧的映射，旧的映射可能指向一个现在已经被分配给别的进程的物理页，这样一个进程就可能扰乱其他进程的内存。
+RISC-V有一条指令\texttt{sfence.vma}用来清空当前CPU的TLB。
+xv6在\texttt{kvminithart}中修改\texttt{satp}寄存器之后执行了\texttt{sfence.vma}，trampoline代码中在返回用户空间之前会先切换到用户的页表，之后也要执行\texttt{sfence.vma}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/trampoline.S#L89}{(kernel/trampoline.S:89)}。
+
+在修改\texttt{satp}之前执行\texttt{sfence.vma}也是必要的，这是为了等待所有load/store指令的完成。
+这可以保证之前对页表的更新已经完成，也确保之前的load和store都是用的旧的页表，而不是新的。
+
+为了避免清空整个TLB，RISC-V CPU可以支持地址空间标识符（ASID）[3]。
+这样内核可以只情况特定地址空间的TLB条目。
+xv6并没有用到这个feature。
+
+\section{物理内存分配}
 
