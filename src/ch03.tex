@@ -198,7 +198,7 @@ PTE只能指向一个4096字节对齐的物理地址（即这个地址必须是4
 
 \section{进程地址空间}
 每个进程都有单独的页表，当xv6切换进程时，它也会切换页表。
-\autoref{f3-4}相比于\autoref{f2-3}更加详细地展示了进城的地址空间。
+\autoref{f3-4}相比于\autoref{f2-2}更加详细地展示了进城的地址空间。
 一个进程的用户内存从虚拟地址0开始并可以增长到\texttt{MAXVA}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/riscv.h#L360}{(kernel/riscv.h:360)}，理论上允许一个进程寻址最多256GB的内存。
 
 \begin{figure}[htbp]
@@ -243,7 +243,16 @@ xv6为这些PTE设置了\texttt{PTE\_W}、\texttt{PTE\_R}、\texttt{PTE\_U}、\t
 然后，内核把trampoline代码的页映射到用户地址空间的顶部（没有\texttt{PTE\_U}），这样一个物理页就可以在所有地址空间中可见，但只有内核可以使用它。
 
 \section{代码：\texttt{sbrk}}
+\texttt{sbrk}是一个系统调用，进程可以使用它缩减或增长自己的内存。
+这个系统调用由函数\texttt{growproc}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/proc.c#L260}{(kernel/proc.c:260)}实现。
+\texttt{growproc}可能会调用\texttt{uvmalloc}或\texttt{uvmdealloc}，取决于\texttt{n}是正数还是负数。
+\texttt{uvmalloc}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/vm.c#L226}{(kernel/vm.c:226)}使用\texttt{kalloc}分配内存，并使用\texttt{mappages}向用户页表中添加PTE。
+\texttt{uvmdealloc}会调用\texttt{uvmunmap}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/vm.c#L171}{(kernel/vm.c:171)}，它使用\texttt{walk}寻找PTE并使用\texttt{kfree}释放它们指向的物理内存。
 
+xv6使用进程的页表时，不仅是用它来告诉硬件如何映射用户虚拟地址，还用它来记录哪些物理内存页已经被分配给进程。
+这样是为什么释放用户内存（在\texttt{uvmunmap}中）需要检查用户页表。
+
+\section{代码：\texttt{exec}}
 
 
 
