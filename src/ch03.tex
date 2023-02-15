@@ -171,3 +171,30 @@ xv6使用从内核的结尾开始到\texttt{PHYSTOP}之间的物理内存进行�
 分配一个页面需要从链表中移除一个页，释放一个页面需要把页加回到空闲链表中。
 
 \section{代码：物理内存分配器}
+分配器的代码在\texttt{kalloc.c}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/kalloc.c#L1}{(kernel/kalloc.c:1)}中。
+分配器的数据结构是物理内存页组成的\emph{空闲链表(free list)}。
+每个空闲页对应的链表节点是一个\texttt{struct run}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/kalloc.c#L17}{(kernel/kalloc.c:17)}。
+分配器把这些数据结构存储到何处呢？
+它把每个空闲页的\texttt{run}结构体直接存储在这个页里，因为这个页目前是空闲的，所以里面没有别的内容。
+空闲链表被一个自旋锁\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/kalloc.c#L21-L24}{(kernel/kalloc.c:21-24)}保护着。
+列表和锁被包装进一个结构体以清晰地表明这个锁是为了保护结构体中的字段。
+目前我们可以忽略这个锁和\texttt{acquire}、\texttt{release}调用，\autoref{ch06}将会详细介绍锁。
+
+\texttt{main}函数会调用\texttt{kinit}来初始化分配器\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/kalloc.c#L27}{(kernel/kalloc.c:27)}。
+\texttt{kinit}把空闲链表初始化为包含内核结尾到\texttt{PHYSTOP}之间的每个页。
+xv6本应该通过解析硬件提供的配置信息来决定有多少物理内存可用。
+但实际上xv6直接假设机器有128MB的RAM。
+\texttt{kinit}会调用\texttt{freerange}，它对范围内的每个页调用\texttt{kfree}把它们加入到空闲链表中。
+PTE只能指向一个4096字节对齐的物理地址（即这个地址必须是4096的整数倍），因此\texttt{freerage}使用\texttt{PGROUNDUP}来保证它只释放对齐的物理地址。
+分配器起始时是没有内存可以管理的，这些\texttt{kfree}的调用给它提供了内存。
+
+分配器有时会把地址当做整数以对它们进行算术运算（例如，遍历\texttt{freerange}中的所有页），有时又会把地址当作指针来读写内存（例如，把\texttt{run}结构体存储在每个页中），对地址的双重用法是分配器的代码中充满C类型转换的主要原因。
+另一个原因是释放和分配操作本质上会改变内存的类型。
+
+\texttt{kfree}函数\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/kalloc.c#L47}{(kernel/kalloc.c:47)}首先把要释放的页中的每个字节都置为1。
+这会导致在页被释放以后（通过“悬垂指针”）访问它的代码读取到的都是垃圾数据而不是旧的有效的数据，这样也许能帮助这样的代码更快地崩溃。
+\texttt{kfree}会把页放在空闲列表的首部：它把\texttt{pa}转换成一个\texttt{struct run}的指针，把空闲列表的旧根节点存储在\texttt{r->next}中，然后让空闲列表的根节点等于\texttt{r}。
+\texttt{kalloc}移除并返回空闲列表中的第一个节点。
+
+\section{处理地址空间}
+
