@@ -161,5 +161,32 @@ trampoline页被映射到了用户和内核页表中的同一虚拟地址处，�
 一个类似的函数，\texttt{copyout}，把内核中的数据拷贝到一个用户提供的地址处。
 
 \section{来自内核空间的自陷}\label{s4-5}
+xv6会根据现在正在执行用户还是内核代码来给CPU自陷寄存器设置不同的值。
+当CPU在执行内核代码时，内核会设置\texttt{stvec}指向\texttt{kernelvec}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/kernelvec.S#L12}{(kernel/kernelvec.S:12)}处的汇编代码。
+因为xv6已经在内核里了，所以\texttt{kernelvec}可以直接使用\texttt{satp}，因为它现在已经指向内核的页表了，同时此时的栈也指向一个有效的内核栈。
+\texttt{kernelvec}把所有32位的寄存器存入栈中，之后返回时可以恢复，这样被中断的内核代码可以继续之前的执行。
+
+\texttt{kernelvec}把寄存器保存在被中断的内核线程的栈中，这样做很合理，因为这些寄存器的值本就属于这个线程。
+如果自陷导致切换到一个不同的线程时，这一点显得尤其重要——这种情况下自陷将会从新线程的栈返回，而旧线程的寄存器值仍安全地保存在它自己的栈中。
+
+\texttt{kernelvec}在保存完寄存器后跳转到\texttt{kerneltrap}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/trap.c#L135}{(kernel/trap.c:135)}。
+\texttt{kerneltrap}为两种类型的自陷做好准备：设备中断和异常。
+它调用\texttt{devintr}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/trap.c#L178}{(kernel/trap.c:178)}来检查并处理前者。
+如果这个自陷不是设备中断，那么它肯定是一个异常，并且如果是在xv6内核中发生的话，那么它通常是一个致命错误，内核会调用\texttt{panic}并停止执行。
+
+如果\texttt{kerneltrap}是因为时钟中断而被调用，并且一个进程的内核线程正在运行（与调度器线程相反\footnote{todo！}），那么\texttt{kerneltrap}会调用\texttt{yield}以给其他线程一个运行的机会。
+在某个时间点，那些线程的其中一个将会yield，然后我们的线程和它的\texttt{kerneltrap}将会恢复执行。
+\autoref{ch07}将会解释\texttt{yield}中发生了什么。
+
+当\texttt{kerneltrap}的工作结束之后，它需要返回到被自陷中断的代码。
+因为\texttt{yield}可能会扰乱\texttt{sepc}和\texttt{sstatus}中之前的模式，所以\texttt{kerneltrap}会在开始时保存它们。
+现在它需要恢复这些控制寄存器并返回到\texttt{kernelvec}\href{URL}{(kernel/kernelvec.S:50)}。
+\texttt{kernelvec}会从栈中弹出保存的寄存器值，并执行\texttt{sret}，这条指令会把\texttt{sepc}拷贝到\texttt{pc}，然后恢复执行被中断的内核代码。
+
+当\texttt{kerneltrap}因为时钟中断而调用\texttt{yield}时，自陷的返回是如何发生的是一个值得思考的问题。
+
+当CPU从用户空间进入内核时xv6会把CPU的\texttt{stvec}设置为\texttt{kernelvec}，你可以在\texttt{usertrap}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/trap.c#L29}{(kernel/trap.c:29)}中看到这一点。
+有一个时间段是内核开始执行但\texttt{stvec}仍然是\texttt{uservec}，保证这段时间内没有设备中断发生是非常重要的。
+幸运的是RISC-V总是在开始处理自陷时禁用所有的中断，xv6直到设置了\texttt{stvec}之后才会启用中断。
 
 \section{页面错误异常}\label{s4-6}
