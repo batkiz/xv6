@@ -137,6 +137,28 @@ trampoline页被映射到了用户和内核页表中的同一虚拟地址处，�
 如果系统调用号无效，\texttt{syscall}会打印出一个错误然后返回\texttt{-1}。
 
 \section{代码：系统调用参数}
+内核中的系统调用实现需要查找用户代码传递过来的参数。
+因为用户代码调用的是系统调用的包装函数，所以参数会被放在RISC-V的C调用规范要求的地方：即寄存器里。
+内核的自陷代码把用户寄存器保存到了当前进程的trapframe里，因此内核可以在这里找到参数。
+内核函数\texttt{argint}、\texttt{argaddr}、\texttt{argfd}从trapframe中获取系统调用的第\texttt{n}个参数，并分别将其看作一个整数、指针、文件描述符。
+它们都会调用\texttt{argraw}来获取正确的用户寄存器的值\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/syscall.c#L34}{(kernel/syscall.c:34)}。
+
+一些系统调用传递指针作为参数，内核必须使用这些指针来读或写用户内存。
+例如，\texttt{exec}系统调用就会传递给内核一个指针的数组，每个指针指向一个用户空间的字符串参数。
+这些指针带来了两个挑战。
+第一是，用户程序可能有bug或者是恶意的，有可能向内核传递一个无效的指针或者一个蓄意的指针以欺骗内核去访问内核内存而不是用户内存。
+第二是，xv6的内核页表映射和用户页表映射是不同的，因此内核不能直接使用普通的指令去load或store用户提供的地址。
+
+内核实现了一些函数用于安全地从用户提供的地址处迁移数据。
+\texttt{fetchstr}就是一个例子\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/syscall.c#L25}{(kernel/syscall.c:25)}。
+文件系统调用例如\texttt{exec}使用\texttt{fetchstr}来从用户空间获取字符串文件名参数。
+\texttt{fetchstr}调用\texttt{copyinstr}来处理麻烦的部分。
+
+\texttt{copyinstr}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/vm.c#L403}{(kernel/vm.c:403)}从用户页表\texttt{pagetable}的虚拟地址\texttt{srcva}处拷贝致多\texttt{max}个字节到\texttt{dst}处。
+因为\texttt{pagetable}\emph{并不是}当前的页表，所以\texttt{copyinstr}使用\texttt{walkaddr}（它会再调用\texttt{walk}）在\texttt{pagetable}中查找\texttt{srcva}，最后返回物理地址\texttt{pa0}。
+内核把每一个物理RAM地址都映射到了相应的内核虚拟地址，因此\texttt{copyinstr}可以直接从\texttt{pa0}处拷贝字符串到\texttt{dst}。
+\texttt{walkaddr}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/vm.c#L109}{(kernel/vm.c:109)}会检查用户提供的虚拟地址是否属于进程的用户地址空间，因此程序不能欺骗内核去读取其他的内存。
+一个类似的函数，\texttt{copyout}，把内核中的数据拷贝到一个用户提供的地址处。
 
 \section{来自内核空间的自陷}\label{s4-5}
 
