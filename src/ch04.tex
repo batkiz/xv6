@@ -121,6 +121,20 @@ trampoline页被映射到了用户和内核页表中的同一虚拟地址处，�
 \texttt{userret}把\texttt{TRAPFRAME}地址加载进\texttt{a0}，通过\texttt{a0}恢复trapframe中保存的用户寄存器的内容，恢复保存的用户\texttt{a0}，然后执行\texttt{sret}来返回到用户空间。
 
 \section{代码：调用系统调用}
+\autoref{ch02}结束时提到\texttt{initcode.S}会调用\texttt{exec}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/initcode.S#L11}{(user/initcode.S:11)}系统调用。
+让我们看看用户调用是怎么逐渐到达内核中的\texttt{exec}系统调用实现的。
+
+\texttt{initcode.S}把\texttt{exec}的参数放在寄存器\texttt{a0}和\texttt{a1}中，把系统调用号放在\texttt{a7}中。
+系统调用号和\texttt{syscalls}数组中的条目匹配，这个数组是一个函数指针表\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/syscall.c#L107}{(kernel/syscall.c:107)}。
+\texttt{ecall}指令陷入内核并逐步执行\texttt{uservec}、\texttt{usertrap}、\texttt{syscall}，这些我们上一节已经说过了。
+
+\texttt{syscall}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/syscall.c#L132}{(kernel/syscall.c:132)}从trapframe中存储的\texttt{a7}中获取获取系统调用号，并使用它索引\texttt{syscalls}。
+对于第一个系统调用，\texttt{a7}中的值是\texttt{SYS\_exec}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/syscall.h#L8}{(kernel/syscall.h:8)}，所以之后会调用\texttt{sys\_exec}函数作为系统调用的实现。
+
+当\texttt{sys\_exec}返回时，\texttt{syscall}会把它的返回值记录在\texttt{p->trapframe->a0}中。
+这将会导致最初对\texttt{exec()}的用户空间的调用也返回这个值，因为RISC-V中的C调用规范会把返回值存在\texttt{a0}中。
+系统调用通常返回负值表示出错，0或正数表示成功。
+如果系统调用号无效，\texttt{syscall}会打印出一个错误然后返回\texttt{-1}。
 
 \section{代码：系统调用参数}
 
