@@ -198,7 +198,7 @@ PTE只能指向一个4096字节对齐的物理地址（即这个地址必须是4
 
 \section{进程地址空间}
 每个进程都有单独的页表，当xv6切换进程时，它也会切换页表。
-\autoref{f3-4}相比于\autoref{f2-2}更加详细地展示了进城的地址空间。
+\autoref{f3-4}相比于\autoref{f2-2}更加详细地展示了进程的地址空间。
 一个进程的用户内存从虚拟地址0开始并可以增长到\texttt{MAXVA}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv/kernel/riscv.h#L360}{(kernel/riscv.h:360)}，理论上允许一个进程寻址最多256GB的内存。
 
 \begin{figure}[htbp]

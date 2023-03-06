@@ -1,5 +1,296 @@
 \chapter{自陷和系统调用}\label{ch04}
 
-但运行一个进程时，一个CPU会进行通常的处理器循环：读取一条指令、递增程序计数器、执行指令，然后重复。但有一些事件可以控制用户程序必须返回到内核而不是执行下一条指令。这些事件包括一个硬件的信号、一个用户程序正在进行非法操作的（例如，访问没有页表项的虚拟地址）、或者一个用户程序通过系统调用请求内核服务。在处理这些事件时有三个主要的挑战：1）内核必须处理好用户态到内核态的切换（反之亦然）；2）内核和设备必须协调好它们的并行活动；3）内核必须理解设备的接口。解决这3个挑战需要对硬件有深入的了解，并且谨慎地进行编程，并且可能导致不透明的内核代码。本章解释xv6如何解决这三个挑战。
+有三种事件会导致CPU暂停执行普通的指令，并强行跳转到处理这个事件的特殊代码处。
+一种情况是系统调用，用户程序执行\texttt{ecall}指令要求内核为它提供服务。
+另一种情况是\emph{异常(exception)}：一条指令（用户程序或内核中的）做了一些非法的事情，例如除以0或者使用了无效的虚拟地址。
+第三种情况是设备\emph{中断(interrupt)}：一个设备可能会发送信号表示它需要关注，例如磁盘硬件完成了一个读或写请求。
+
+这本书使用\emph{自陷(trap)}作为这三种情况的通用术语。
+通常情况下，不管自陷时在执行什么代码，之后都需要恢复，并且这段代码不应该意识到这期间发生了别的事情。
+也就是说，我们希望自陷是透明的，这对硬件中断来说尤其重要，被中断的代码通常不期望这些中断。
+通常的流程是自陷迫使控制流转移到内核、内核保存寄存器和其他状态以便于之后恢复之前的执行、内核执行对应的处理代码（例如，一个系统调用的实现或者设备驱动）、内核恢复保存的状态并从自陷返回、原来的代码从中断处恢复执行。
+
+xv6在内核中处理所有的自陷，它们不会被分发到用户代码中。
+对系统调用来说在内核中处理自陷是很自然的。
+这么做对中断来说也是有意义的，因为隔离性要求只有内核才能使用设备，也因为内核是一种很方便地在多个进程间共享设备的机制。
+对异常来说也同样有意义，因为xv6对所有来自用户空间的异常的处理方式都是杀掉引发异常的进程。
+
+xv6的自陷处理按照四个阶段处理：RISC-V CPU执行的硬件行为，一些为内核中的C代码进行准备工作的汇编指令，一个决定要对自陷做什么的C函数，最后是相应的系统调用或者设备驱动的服务。
+尽管三种自陷类型的共通之处表明内核可以在单一的代码段中处理这三种情况，但事实表明为以下三种情况分别编写不同的代码会更加方便：来自用户空间的自陷、来自内核空间的自陷、时钟中断。
+处理自陷的内核代码（汇编或C）通常被称为\emph{handler}，第一个handler通常用汇编器（而不是C）编写，有时被称为\emph{向量(vector)}\footnote{todo！}。
+
+\section{RISC-V自陷机制}
+每个RISC-V CPU都有一组控制寄存器，内核通过写入这些寄存器来告诉CPU如何处理自陷，内核也可以通过读取这些寄存器来查明发生的自陷。
+RISC-V的文档包含了完整的流程[3]。\texttt{riscv.h}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/riscv.h#L1}{(kernel/riscv.h:1)}包含了xv6使用到的定义。
+这里是最重要的寄存器的概述：
+\begin{itemize}
+    \item \texttt{stvec}：内核把自陷的handler的地址写入这个寄存器，RISC-V会跳转到\texttt{stvec}中的地址来处理一个自陷。
+    \item \texttt{sepc}：当自陷发生时，RISC-V会把程序计数器保存到这里（因为\texttt{pc}即将被\texttt{stvec}中的值覆盖）。
+    \texttt{sret}指令（用于从自陷返回）把\texttt{sepc}拷贝到\texttt{pc}。
+    内核可以写入\texttt{sepc}来控制\texttt{sret}跳转的目标。
+    \texttt{scause}：RISC-V把一个数字存储在里面，用来描述自陷的原因。
+    \texttt{sscratch}：自陷的handler代码使用\texttt{sscratch}来避免在保存用户寄存器之前覆盖掉它们。
+    \texttt{sstatus}：\texttt{sstatus}中的SIE位控制是否允许设备中断。
+    如果内核清楚了SIE位，RISC-V将会推迟设备中断，直到内核设置SIE位。
+    SPP位指示自陷是来自用户模式还是管理模式，并控制\texttt{sret}返回的模式。
+\end{itemize}
+
+上面的寄存器与在管理下处理的自陷有关，它们在用户模式下不能被读写。
+还有一组类似的寄存器用于机器模式下处理的自陷，xv6只把它们用于时钟中断这个特殊的例子。
+
+多核芯片上的每个CPU都有自己的寄存器，任何时刻都可能有不止一个CPU正在处理自陷。
+
+当自陷发生时，RISC-V硬件为所有的自陷类型进行下列操作（时钟中断除外）：
+\begin{enumerate}
+    \item 如果自陷是一次设备中断，并且\texttt{sstatus}的SIE位被清除，那么不会进行下面的步骤。
+    \item 清除\texttt{sstatus}中的SIE位来禁用中断。
+    \item 把\texttt{pc}拷贝到\texttt{sepc}。
+    \item 把当前的模式（用户或者管理模式）保存到\texttt{sstatus}的SPP位中。
+    \item 设置\texttt{scause}来表明自陷的原因。
+    \item 把模式设置为管理模式。
+    \item 把\texttt{stvec}拷贝到\texttt{pc}。
+    \item 开始在新\texttt{pc}处执行。
+\end{enumerate}
+
+注意CPU不会切换到内核页表，也不会切换到内核栈，也不会保存除了\texttt{pc}之外的任何寄存器。
+内核软件必须自己完成这些任务。
+CPU在自陷过程中只做最少的工作，其中一个原因是为了给软件提供灵活性，例如，有些操作系统在某些情况下会省略页表的切换以提高自陷的性能。
+
+一个值得思考的问题是上面列出的步骤是否都可以省略以提高性能。
+尽管有些情况下更简单的步骤就可以正常工作，但一般情况下很多步骤如果被省略都会很危险。
+例如，假设CPU不切换程序计数器。
+那么一个来自用户空间的自陷就可以切换到管理模式同时继续运行用户的指令。
+这些用户指令可能会打破用户/内核的隔离，例如通过修改\texttt{satp}寄存器，让它指向一个允许所有物理内存访问的页表。
+因此让CPU切换到一个内核指定的指令地址，即\texttt{stvec}是很重要的。
+
+\section{用户空间的自陷}
+xv6根据自陷是在执行内核还是用户代码时出现的进行不同的处理。
+这一节介绍来自用户代码的自陷，\autoref{s4-5}描述了来自内核代码的自陷。
+
+用户空间发生的中断可能是因为用户程序进行了系统调用（\texttt{ecall}指令），或者进行了非法操作，或者是设备中断。
+处理来自用户空间的自陷的入口是\texttt{uservec}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/trampoline.S#L21}{(kernel/trampoline.S:21)}，然后是\texttt{usertrap}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/trap.c#L37}{(kernel/trap.c:37)}；返回时先是\texttt{usertrapret}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/trap.c#L90}{(kernel/trap.c:90)}，然后是\texttt{userret}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/trampoline.S#L101}{(kernel/trampoline.S:101)}。
+
+在设计xv6的自陷处理时，一个主要的限制是RISC-V硬件在自陷时不会切换页表。
+这意味着\texttt{stvec}中的自陷handler地址必须在用户页表中有一个有效的映射，因为自陷处理代码开始执行时的页表还是用户页表。
+另外，xv6的自陷处理代码需要切换到内核的页表，为了能在切换后继续执行，内核的页表中也必须有\texttt{stvec}中存储的handler地址的有效映射。
+
+xv6使用一个\emph{trampoline}页来满足这些需求。
+trampoline页中包含了\texttt{uservec}，这是\texttt{stvec}指向的xv6的自陷处理代码。
+trampoline页在每个进程的页表中被映射到\texttt{TRAMPOLINE}地址处，这个地址位于虚拟地址空间的顶部，这样它将位于程序自身用到的内存空间之上。
+trampoline页也在内核的页表中被映射到了\texttt{TRAMPOLINE}地址。
+如\autoref{f2-2}和\autoref{3-3}所示。
+因为trampoline页被映射到了用户页表中，并且没有\texttt{PTE\_U}标记，所以自陷可以在管理模式下在那里开始执行。
+同时因为trampoline页也被映射到了内核地址空间的同一地址处，自陷handler可以在切换到内核页表后继续执行。
+
+\texttt{uservec}自陷handler的代码在\texttt{trampoline.S}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/trampoline.S#L21}{(kernel/trampoline.S:21)}中。
+当\texttt{uservec}开始执行时，所有32个寄存器包含的值都属于被中断的用户代码。
+这32个值必须要保存到内存中，这样在返回用户空间之前可以恢复它们。
+把值保存到内存中需要一个寄存器来存储目标地址，但在这个时候没有通用寄存器可以用！
+幸运的是RISC-V以\texttt{sscratch}寄存器的形式提供了帮助。
+\texttt{uservec}中开头的\texttt{csrw}指令寄存器把\texttt{a0}保存到\texttt{sscratch}中。
+现在\texttt{uservec}就有了一个可以操作的寄存器（\texttt{a0}）。
+
+\texttt{uservec}的下一个任务是保存32个用户寄存器。
+内核为每个进程分配了一个内存页用来存储一个\texttt{trapframe}结构体，它有足够的空间存储32个用户寄存器\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/proc.h#L43}{(kernel/proc.h:43)}。
+因为此时\texttt{satp}仍然指向用户页表，所以\texttt{uservec}需要trapframe被映射到用户地址空间。
+xv6把每个进程的trapframe映射到那个进程的用户页表的虚拟地址\texttt{TRAPFRAME}处，\texttt{TRAPFRAME}正好在\texttt{TRAMPOLINE}下面。
+进程的\texttt{p->trapframe}也指向trapframe，不过是指向它的物理地址，这样内核可以通过内核页表使用它。
+
+\texttt{uservec}把地址\texttt{TRAPFRAME}加载到\texttt{a0}中，然后把所有用户寄存器保存在那里，包括用户的\texttt{a0}寄存器。
+
+\texttt{trapframe}包含当前进程的内核栈的地址、当前CPU的hartid、\texttt{usertrap}函数的地址、内核页表的地址。
+\texttt{uservec}检索这些值，然后把\texttt{satp}切换到内核的页表，最后调用\texttt{usertrap}。
+
+\texttt{usertrap}的任务是判定自陷的原因、处理它、最后返回\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/trap.c#L37}{(kernel/trap.c:37)}。
+它首先修改\texttt{stvec}，这样在内核中触发的自陷就会被\texttt{kernelvec}而不是\texttt{uservec}处理。
+它还会保存\texttt{sepc}寄存器（用于保存用户程序的计数器），因为\texttt{usertrap}可能会调用\texttt{yield}来切换到另一个进程的内核线程，并且那个进程可能会返回用户空间，这个过程中它会修改\texttt{sepc}。
+如果自陷是一个系统调用，那么\texttt{usertrap}调用\texttt{syscall}来处理它；如果是一个设备中断，则调用\texttt{devintr}；否则就是一个异常，内核会杀死出故障的进程。
+系统调用的handler会把保存的用户程序计数器加上4，因为在系统调用的情况下程序计数器会指向\texttt{ecall}指令，而用户代码需要在下一条指令处恢复执行。
+在退出过程中，\texttt{usertrap}检查进程是否已被killed，或是否应该让出CPU（如果这个自陷是计时器中断）。
+
+返回到用户地址空间的第一步是调用\texttt{usertrapret}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/trap.c#L90}{(kernel/trap.c:90)}。
+这个函数设置RISC-V控制寄存器，为下一个用户空间的自陷做准备。
+这涉及到把\texttt{stvec}设置为\texttt{uservec}，准备\texttt{uservec}依赖的trapframe字段，并把\texttt{sepc}设置为之前保存的用户程序计数器。
+最后，\texttt{usertrapret}调用\texttt{userret}函数，这个函数在trampoline页里，因为\texttt{userret}中的汇编代码会切换页表。
+
+\texttt{usertrapret}调用\texttt{userret}时会用\texttt{a0}传递一个指向进程的用户页表的指针\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/trampoline.S#L101}{(kernel/trampoline.S:101)}。
+\texttt{userret}把\texttt{satp}设置为进城的用户页表。
+回顾一下，用户页表映射了内核中的trampoline页和\texttt{TRAPFRAME}。
+trampoline页被映射到了用户和内核页表中的同一虚拟地址处，这允许\texttt{userret}在修改\texttt{satp}之后还能继续执行。
+从这个点开始，\texttt{userret}唯一可以使用的数据就是寄存器和trapframe的内容。
+\texttt{userret}把\texttt{TRAPFRAME}地址加载进\texttt{a0}，通过\texttt{a0}恢复trapframe中保存的用户寄存器的内容，恢复保存的用户\texttt{a0}，然后执行\texttt{sret}来返回到用户空间。
+
+\section{代码：调用系统调用}
+\autoref{ch02}结束时提到\texttt{initcode.S}会调用\texttt{exec}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//user/initcode.S#L11}{(user/initcode.S:11)}系统调用。
+让我们看看用户调用是怎么逐渐到达内核中的\texttt{exec}系统调用实现的。
+
+\texttt{initcode.S}把\texttt{exec}的参数放在寄存器\texttt{a0}和\texttt{a1}中，把系统调用号放在\texttt{a7}中。
+系统调用号和\texttt{syscalls}数组中的条目匹配，这个数组是一个函数指针表\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/syscall.c#L107}{(kernel/syscall.c:107)}。
+\texttt{ecall}指令陷入内核并逐步执行\texttt{uservec}、\texttt{usertrap}、\texttt{syscall}，这些我们上一节已经说过了。
+
+\texttt{syscall}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/syscall.c#L132}{(kernel/syscall.c:132)}从trapframe中存储的\texttt{a7}中获取获取系统调用号，并使用它索引\texttt{syscalls}。
+对于第一个系统调用，\texttt{a7}中的值是\texttt{SYS\_exec}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/syscall.h#L8}{(kernel/syscall.h:8)}，所以之后会调用\texttt{sys\_exec}函数作为系统调用的实现。
+
+当\texttt{sys\_exec}返回时，\texttt{syscall}会把它的返回值记录在\texttt{p->trapframe->a0}中。
+这将会导致最初对\texttt{exec()}的用户空间的调用也返回这个值，因为RISC-V中的C调用规范会把返回值存在\texttt{a0}中。
+系统调用通常返回负值表示出错，0或正数表示成功。
+如果系统调用号无效，\texttt{syscall}会打印出一个错误然后返回\texttt{-1}。
+
+\section{代码：系统调用参数}
+内核中的系统调用实现需要查找用户代码传递过来的参数。
+因为用户代码调用的是系统调用的包装函数，所以参数会被放在RISC-V的C调用规范要求的地方：即寄存器里。
+内核的自陷代码把用户寄存器保存到了当前进程的trapframe里，因此内核可以在这里找到参数。
+内核函数\texttt{argint}、\texttt{argaddr}、\texttt{argfd}从trapframe中获取系统调用的第\texttt{n}个参数，并分别将其看作一个整数、指针、文件描述符。
+它们都会调用\texttt{argraw}来获取正确的用户寄存器的值\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/syscall.c#L34}{(kernel/syscall.c:34)}。
+
+一些系统调用传递指针作为参数，内核必须使用这些指针来读或写用户内存。
+例如，\texttt{exec}系统调用就会传递给内核一个指针的数组，每个指针指向一个用户空间的字符串参数。
+这些指针带来了两个挑战。
+第一是，用户程序可能有bug或者是恶意的，有可能向内核传递一个无效的指针或者一个蓄意的指针以欺骗内核去访问内核内存而不是用户内存。
+第二是，xv6的内核页表映射和用户页表映射是不同的，因此内核不能直接使用普通的指令去load或store用户提供的地址。
+
+内核实现了一些函数用于安全地从用户提供的地址处迁移数据。
+\texttt{fetchstr}就是一个例子\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/syscall.c#L25}{(kernel/syscall.c:25)}。
+文件系统调用例如\texttt{exec}使用\texttt{fetchstr}来从用户空间获取字符串文件名参数。
+\texttt{fetchstr}调用\texttt{copyinstr}来处理麻烦的部分。
+
+\texttt{copyinstr}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/vm.c#L403}{(kernel/vm.c:403)}从用户页表\texttt{pagetable}的虚拟地址\texttt{srcva}处拷贝致多\texttt{max}个字节到\texttt{dst}处。
+因为\texttt{pagetable}\emph{并不是}当前的页表，所以\texttt{copyinstr}使用\texttt{walkaddr}（它会再调用\texttt{walk}）在\texttt{pagetable}中查找\texttt{srcva}，最后返回物理地址\texttt{pa0}。
+内核把每一个物理RAM地址都映射到了相应的内核虚拟地址，因此\texttt{copyinstr}可以直接从\texttt{pa0}处拷贝字符串到\texttt{dst}。
+\texttt{walkaddr}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/vm.c#L109}{(kernel/vm.c:109)}会检查用户提供的虚拟地址是否属于进程的用户地址空间，因此程序不能欺骗内核去读取其他的内存。
+一个类似的函数，\texttt{copyout}，把内核中的数据拷贝到一个用户提供的地址处。
+
+\section{来自内核空间的自陷}\label{s4-5}
+xv6会根据现在正在执行用户还是内核代码来给CPU自陷寄存器设置不同的值。
+当CPU在执行内核代码时，内核会设置\texttt{stvec}指向\texttt{kernelvec}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/kernelvec.S#L12}{(kernel/kernelvec.S:12)}处的汇编代码。
+因为xv6已经在内核里了，所以\texttt{kernelvec}可以直接使用\texttt{satp}，因为它现在已经指向内核的页表了，同时此时的栈也指向一个有效的内核栈。
+\texttt{kernelvec}把所有32位的寄存器存入栈中，之后返回时可以恢复，这样被中断的内核代码可以继续之前的执行。
+
+\texttt{kernelvec}把寄存器保存在被中断的内核线程的栈中，这样做很合理，因为这些寄存器的值本就属于这个线程。
+如果自陷导致切换到一个不同的线程时，这一点显得尤其重要——这种情况下自陷将会从新线程的栈返回，而旧线程的寄存器值仍安全地保存在它自己的栈中。
+
+\texttt{kernelvec}在保存完寄存器后跳转到\texttt{kerneltrap}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/trap.c#L135}{(kernel/trap.c:135)}。
+\texttt{kerneltrap}为两种类型的自陷做好准备：设备中断和异常。
+它调用\texttt{devintr}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/trap.c#L178}{(kernel/trap.c:178)}来检查并处理前者。
+如果这个自陷不是设备中断，那么它肯定是一个异常，并且如果是在xv6内核中发生的话，那么它通常是一个致命错误，内核会调用\texttt{panic}并停止执行。
+
+如果\texttt{kerneltrap}是因为时钟中断而被调用，并且一个进程的内核线程正在运行（与调度器线程相反\footnote{todo！}），那么\texttt{kerneltrap}会调用\texttt{yield}以给其他线程一个运行的机会。
+在某个时间点，那些线程的其中一个将会yield，然后我们的线程和它的\texttt{kerneltrap}将会恢复执行。
+\autoref{ch07}将会解释\texttt{yield}中发生了什么。
+
+当\texttt{kerneltrap}的工作结束之后，它需要返回到被自陷中断的代码。
+因为\texttt{yield}可能会扰乱\texttt{sepc}和\texttt{sstatus}中之前的模式，所以\texttt{kerneltrap}会在开始时保存它们。
+现在它需要恢复这些控制寄存器并返回到\texttt{kernelvec}\href{URL}{(kernel/kernelvec.S:50)}。
+\texttt{kernelvec}会从栈中弹出保存的寄存器值，并执行\texttt{sret}，这条指令会把\texttt{sepc}拷贝到\texttt{pc}，然后恢复执行被中断的内核代码。
+
+当\texttt{kerneltrap}因为时钟中断而调用\texttt{yield}时，自陷的返回是如何发生的是一个值得思考的问题。
+
+当CPU从用户空间进入内核时xv6会把CPU的\texttt{stvec}设置为\texttt{kernelvec}，你可以在\texttt{usertrap}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/trap.c#L29}{(kernel/trap.c:29)}中看到这一点。
+有一个时间段是内核开始执行但\texttt{stvec}仍然是\texttt{uservec}，保证这段时间内没有设备中断发生是非常重要的。
+幸运的是RISC-V总是在开始处理自陷时禁用所有的中断，xv6直到设置了\texttt{stvec}之后才会启用中断。
 
 \section{页面错误异常}\label{s4-6}
+xv6对异常的响应很枯燥：如果异常在用户空间发生，内核会杀死出错的进程。
+如果异常在内核中发生，内核会panic。
+真实的操作系统通常会有更有趣的处理方式。
+
+举一个例子，大多数内核都会使用页面错误来实现\emph{写时复制(copy-on-write)(COW) fork}。
+为了解释写时复制fork，回想一下我们在\autoref{ch03}中介绍的xv6的\texttt{fork}。
+\texttt{fork}导致子进程的初始内存和父进程在调用fork时的状态一模一样。
+xv6使用\texttt{uvmcopy}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/vm.c#L306}{(kernel/vm.c:306)}，它为子进程分配物理内存并把父进程的内存拷贝过来。
+如果子进程能和父进程共享父进程的物理内存，那么显然会更高效。
+然而一个直观的实现并不能工作，因为父进程和子进程写入共享的栈和堆将会扰乱彼此的执行。
+
+通过恰当地使用页表的权限机制和页面错误，父进程和子进程可以安全地共享物理内存。
+使用一个在页表中未映射的虚拟地址，或者这个映射没有设置\texttt{PTE\_V}标记，或者这个映射的权限位（\texttt{PTE\_R}、\texttt{PTE\_W}、\texttt{PTE\_X}、\texttt{PTE\_U}）禁止将要执行的操作时，CPU会抛出一个\emph{页面错误异常(page-fault exception)}。
+RISC-V区分了三种页面错误：load页面错误（load指令不能翻译虚拟地址时）、store页面异常（store指令不能翻译虚拟地址时）、指令页面错误（程序计数器中的虚拟地址不能翻译时）。
+\texttt{scause}寄存器指示是哪一种页面错误，\texttt{stval}寄存器包含了不能被翻译的地址。
+
+COW fork的基本计划是让子进程初始时和父进程共享相同的物理页，但都是以只读的方式映射（清除掉\texttt{PTE\_W}标记）。
+父进程和子进程可以读取共享的物理内存。
+如果其中一个写入某个页面，RISC-V CPU会抛出一个页面错误异常。
+内核的自陷handler响应这个异常的方式是分配一个新的物理页，并把导致错误的地址映射到的物理页面拷贝到新物理页。
+内核会修改错误进程的页表中相关的PTE，让它指向拷贝，并允许写入，然后在导致错误的指令处恢复执行出错的进程。
+因为现在PTE允许写入了，所以重新执行指令将不会再出错。
+写时复制需要簿记以决定物理页什么时候可以被释放，因为一个页可能被任意数量的页表引用，这取决于fork、页面错误、exec、exit的调用历史。
+这份簿记还可以帮助实现一个重要的优化：如果一个进程触发了一个store页面错误，并且这个物理页只被这个进程的页表引用，那么就不需要拷贝。
+
+写时复制让\texttt{fork}更加快速，因为\texttt{fork}不需要拷贝内存。
+一些内存在之后写入时需要被拷贝，但通常情况下大部分内存永远都不需要拷贝。
+一个常见的例子是\texttt{fork}后跟一个\texttt{exec}：\texttt{fork}之后少数页面可能被写入了，但之后子进程的\texttt{exec}释放了从父进程继承而来的所有内存。
+写时复制\texttt{fork}让这种情况下不再需要拷贝内存。
+而且，COW fork是透明的：应用无需任何修改就可以从中受益。
+
+页表和页面错误的组合使用揭示了除COW fork之外的更多有趣的可能性。
+另一个广泛使用的功能是\emph{惰性分配(lazy allocation)}，它被分为两个步骤。
+首先，当应用通过调用\texttt{sbrk}要求更多内存的时候，内核会标记内存变大了，但并不分配物理内存，也不为新的虚拟地址范围创建页表。
+然后，当出现这些新地址上的页面错误时，内核会分配一个物理内存页并把它映射到页表中。
+和COW fork一样，内核可以对应用透明地实现惰性分配。
+
+因为应用通常会要求比它们需要的更多的内存，所以惰性分配也是一个优化：内核不需要对那些应用从未用到的页进行任何处理。
+另外，如果应用要求大幅度增大地址空间，那么没有惰性分配的\texttt{sbrk}开销会很大：如果一个应用请求1G字节的内存，那么内核需要分配并清零262,144个4096字节的页。
+惰性分配可以把这个开销分摊到后续的执行中。
+另一方面，延迟分配会产生页面错误的额外开销，因为这涉及到内核/用户空间的切换。
+操作系统可以通过分配在一次页面错误中分配分配一批连续的页面而不是一个页面来进行优化，也可以专为这种页面错误优化进入/退出内核的代码。
+
+另一种广泛使用的利用页面错误的功能是\emph{按需分页(demand paging)}。
+在\texttt{exec}中，xv6会立刻把应用所有的文本和数据段都加载进内存中。
+因为应用可能很大，并且从磁盘读取开销很大，这样启动时的开销对用户来说可能很可观：当用户从shell启动一个大应用时，用户可能要等很长时间才能看到响应。
+为了改善响应时间，现代内核会为用户地址空间创建页表，但把页面都标记为无效的。
+当发生页面错误时，内核从磁盘读取页面的内容并把它映射到用户地址空间中。
+与COW fork和惰性分配一样，内核可以对应用透明地实现这个功能。
+
+计算机上运行的程序可能会需要比计算机的RAM更多的内存。
+为了优雅地处理这种情况，操作系统可能会实现\emph{paging to disk}。
+关键思路是只把一部分用户页面存在RAM中，把剩余的部分都存在磁盘的\emph{paging area}。
+内核会把存储在paging area中（而不是在RAM中）的内存的PTE标记为无效。
+如果一个应用尝试使用其中一个被\emph{page out}到磁盘的页，应用将会触发页面错误，然后这个页将会被\emph{page in}：内核的自陷handler将会分配一个物理RAM页，从内存中把页读进RAM，然后修改相应的PTE，让它指向这个RAM页。
+
+如果一个页需要被page in，但没有空闲的物理RAM时该怎么办？
+这种情况下，内核必须首先把一个物理页page out或者说\emph{驱逐(evicting)}到磁盘上的paging area，然后把指向这个页的PTE标记为无效。
+驱逐的开销会很大，因此当它很少发生时性能才是最好的：应用只使用内存页中的一个子集，并且这个子集可以存储在RAM中。
+这个属性属性通常被称为具有良好的空间局部性。
+和很多虚拟内存技术一样，内核通常以一种对应用透明的方式实现paging to disk。
+
+不管硬件提供了多少RAM，计算机通常只有很少或者没有\emph{空闲的(free)}物理内存可以操作。
+例如，云提供商让很多顾客复用同一台机器以充分利用硬件。
+再例如，用户通常在只有很少物理内存的智能手机上运行很多应用。
+在这种情况下分配一个页面可能需要先驱逐一个现有的页。
+因此，当空闲物理内存很稀有时，分配操作将会变得昂贵。
+
+惰性分配和按需分页在空闲内存很少时更能体现出优势。
+在\texttt{sbrk}或\texttt{exec}中急切地分配内存会带来额外的驱逐的开销。
+另外，这样做还可能会有浪费的风险，因为在应用使用这些页之前，操作系统可能已经驱逐了它。
+
+其他组合分页和页面错误异常的技术还包括自动扩展堆栈和内存映射文件。
+
+\section{真实世界}
+trampoline和trapframe可能看起来非常复杂。
+实现它们的驱动力是RISC-V在发生自陷时故意尽可能地做最少的工作，以让非常快速的自陷处理成为可能，事实证明这是很重要的。
+因此，内核的自陷handler的前几条指令不得不在用户环境下（用户页表，用户寄存器内容）执行。
+自陷handler页一开始也不知道有些有用的内容，例如正在进行的进程的标识，或者内核页表的地址。
+解决方案是可能的，因为RISC-V提供了一些受保护的地方，内核可以在进入内核空间之前\footnote{译者注：此处原文是before entering user space，应是作者笔误。}把一些信息存储在这些地方：\texttt{sscratch}寄存器、用户页表中指向内核内存但未设置\texttt{PTE\_U}位以进行保护的条目\footnote{todo！}。
+解决方案是可能的，因为RISC-V提供了受保护的地方，内核可以在进入用户空间之前隐藏信息：
+xv6的trampoline核trapframe就是利用了这些RISC-V特性。
+
+如果内核的内存被（以恰当的PTE权限位）映射到了每个进程的用户页表中，那么可以消除特殊的trampoline页。
+还可以消除自陷从用户空间转到内核时的页表切换。
+如果反过来，可以允许内核中的系统调用实现充分利用当前进程的用户内存，允许内核代码直接解引用用户指针。
+很多操作系统使用了这些方法来提高性能。
+xv6避免了它们以减小内核中因为错误使用用户指针导致安全漏洞的可能性，同时降低了确保用户和内核的虚拟地址不会重叠的复杂性。
+
+生产力操作系统都实现了写时复制fork、惰性分配、按需分页、paging to disk、内存映射文件等。
+除此之外，生产力操作系统将会尝试使用所有的物理内存，可能用于应用也可能用于缓存（例如，文件系统的缓冲区缓存，将在\author{s8-2}中介绍）。
+xv6在这方面还很稚嫩：你希望你的操作系统能使用所有物理内存，但xv6并不会。
+此外，如果xv6内存不足，它会向正在运行的应用返回错误或者杀死它，而不是驱逐另一个应用的一个页。
+
+\section{练习}
+\begin{enumerate}
+    \item 函数\texttt{copyin}和\texttt{copyinstr}通过软件层面遍历用户页表。
+    设置内核的页表以让内核拥有用户程序的映射，这样\texttt{copyin}和\texttt{copyinstr}可以使用\texttt{memcpy}来把系统调用参数拷贝到内核空间，让硬件来进行页表遍历的工作。
+    \item 实现惰性内存分配。
+    \item 实现COW fork。
+    \item 是否有办法可以消除每个用户地址空间中的特殊的\texttt{TRAPFRAME}页的映射。
+    例如是否可以修改一下\texttt{uservec}，让它简单低把32位用户寄存器存在内核栈中，或者\texttt{proc}结构体中？
+    \item 是否可以修改一下xv6，以消除特殊的\texttt{TRAMPOLINE}页映射？
+\end{enumerate}
