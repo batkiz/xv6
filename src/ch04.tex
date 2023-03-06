@@ -265,4 +265,20 @@ COW fork的基本计划是让子进程初始时和父进程共享相同的物理
 其他组合分页和页面错误异常的技术还包括自动扩展堆栈和内存映射文件。
 
 \section{真实世界}
+trampoline和trapframe可能看起来非常复杂。
+实现它们的驱动力是RISC-V在发生自陷时故意尽可能地做最少的工作，以让非常快速的自陷处理成为可能，事实证明这是很重要的。
+因此，内核的自陷handler的前几条指令不得不在用户环境下（用户页表，用户寄存器内容）执行。
+自陷handler页
 
+
+
+\section{练习}
+\begin{enumerate}
+    \item 函数\texttt{copyin}和\texttt{copyinstr}通过软件层面遍历用户页表。
+    设置内核的页表以让内核拥有用户程序的映射，这样\texttt{copyin}和\texttt{copyinstr}可以使用\texttt{memcpy}来把系统调用参数拷贝到内核空间，让硬件来进行页表遍历的工作。
+    \item 实现惰性内存分配。
+    \item 实现COW fork。
+    \item 是否有办法可以消除每个用户地址空间中的特殊的\texttt{TRAPFRAME}页的映射。
+    例如是否可以修改一下\texttt{uservec}，让它简单低把32位用户寄存器存在内核栈中，或者\texttt{proc}结构体中？
+    \item 是否可以修改一下xv6，以消除特殊的\texttt{TRAMPOLINE}页映射？
+\end{enumerate}
