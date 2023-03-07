@@ -5,7 +5,7 @@
 另外，驱动必须理解设备的硬件接口，这些接口可能很复杂并且没有很好的文档。
 
 需要操作系统关注的设备通常会被设置为可以产生中断，它是一种自陷。
-当设备引发中断时，内核自陷的处理代码可以识别出来并调用驱动的中断处理程序，在xv6，这个分发操作在\texttt{devintr}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/trap.c#L178}{(kernel/trap.c:178)}中。
+当设备引发中断时，内核自陷的处理代码可以识别出来并调用驱动的中断处理程序，在xv6，这个分发操作在\texttt{devintr}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/trap.c#L178}{(kernel/trap.c:178)}中。
 
 很多设备驱动在两个上下文中执行代码：\emph{上半段(top half)}在进程的内核线程中执行，\emph{下半段(bottom half)}在中断时执行。
 上半段由像\texttt{read}和\texttt{write}这样的希望设备进行I/O的系统调用进行调用。
@@ -13,4 +13,46 @@
 最后设备完成操作之后会产生一个中断。
 驱动的中断处理程序，会进行下半段操作：查明什么操作结束了，如果需要的话唤醒一个正在等待的进程，并且如果有正在等待的下一个操作的话告诉硬件开始执行。
 
+\section{代码：控制台输入}
+控制台驱动\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/console.c}{(kernel/console.c)}是一个驱动的简单示例。
+控制台驱动通过连接到RISC-V\texttt{UART}串口硬件接受人类输入的字符。
+控制台驱动一次累计一行输入，处理像退格和control-u这样的特殊输入字符。
+用户进程，例如shell，使用\texttt{read}系统调用从控制台获取输入的行。
+当你在QEMU中向xv6输入时，你的按键被QEMU模拟的UART硬件发送给xv6。
+
+这个驱动交互的UART硬件是一个QEMU模拟出的16550芯片[13]。
+在真实的计算机中，16550将管理连接到终端或其他计算机的RS232串行链路。
+当运行QEMU时，它连接到你的键盘和显示器。
+
+UART硬件以一组\emph{内存映射(memory-mapped)}控制寄存器的形式暴露给软件。
+也就是说，有一些物理地址是连接到UART设备的，因此load和store操作会和设备进行交互，而不是和RAM交互。
+UART的内存映射地址从0x10000000开始，或者叫\texttt{UART0}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/memlayout.h#L21}{(kernel/memlayout.h:21)}。
+有几个UART的控制寄存器，每一个宽度都是一个字节。
+它们相对于\texttt{UART0}的偏移量被定义在\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/uart.c#L22}{(kernel/uart.c:22)}。
+例如，\texttt{LSR}寄存器包含指示输入字符是否正在等待被软件读取的位。
+这些字符（如果有的话）可以从\texttt{RHR}寄存器读取。
+每被读取一个字符，UART硬件会把它从内部用于保存待读取字符的FIFO中删除，并且当FIFO为空时清除\texttt{LSR}中的“ready”位。
+UART传输硬件在很大程度上独立于接收硬件，如果软件向\texttt{THR}中写入一个字节，UART就会传输这个字节。
+
+xv6的\texttt{main}调用\texttt{consoleinit}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/console.c#L182}{(kernel/console.c:182)}来初始化UART硬件。
+这段代码配置UART硬件在接收到每个输入字节时就产生一个接收中断，在每结束发送一个字节的输出时产生\emph{传输结束(transmit complete)}中断\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/uart.c#L53}{(kernel/uart.c:53)}。
+
+xv6的shell通过\texttt{init.c}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/user/init.c#L19}{(user/init.c:19)}打开的文件描述符从控制台读取输入。
+\texttt{read}系统调用会为\texttt{consoleread}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/console.c#L80}{(kernel/console.c:80)}进行准备。
+\texttt{consoleread}等待输入到达（通过中断）并被缓存到\texttt{cons.buf}中，然后把输入拷贝到用户空间，并（在接收到一整行后）返回到用户进程。
+如果用户还没有输入完一行，任何读取操作都会在\texttt{sleep}调用处等待\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/console.c#L96}{(kernel/console.c:96)}（\autoref{ch07}将解释\texttt{sleep}的细节）。
+
+当用户输入一个字符时，UART硬件请求RISC-V产生一个中断，然后激活xv6的自陷handler。
+自陷handler会调用\texttt{devintr}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/trap.c#L178}{(kernel/trap.c:178)}，它会查看RISC-V的\texttt{scause}寄存器然后发现这个中断来自于一个外部设备。
+然后它会请求一个叫PLIC[3]的硬件告诉它是哪个设备的中断\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/trap.c#L187}{(kernel/trap.c:187)}。
+如果是UART的话，\texttt{devintr}会调用\texttt{uartintr}。
+
+\texttt{uartintr}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/uart.c#L176}{(kernel/uart.c:176)}从UART硬件中读取所有就绪的输入字符，然后把它们交给\texttt{consoleintr}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/console.c#L136}{(kernel/console.c:136)}处理，它并不会等待字符，因为之后的输入将会产生一个新的中断。
+\texttt{consoleintr}的工作是往累积\texttt{cons.buf}中累积输入字符直到一行结束。
+\texttt{consoleintr}会特殊对待退格和少数其他字符。
+当一个换行符到达时，\texttt{consoleintr}会唤醒一个正在等待的\texttt{consoleread}（如果有的话）。
+
+被唤醒后，\texttt{consoleread}会看到\texttt{cons.buf}中有一整行，然后把它拷贝到用户空间，并（通过系统调用机制）返回到用户空间。
+
+\section{代码：控制台输出}
 
