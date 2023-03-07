@@ -55,4 +55,20 @@ xv6的shell通过\texttt{init.c}\href{https://github.com/mit-pdos/xv6-riscv/blob
 被唤醒后，\texttt{consoleread}会看到\texttt{cons.buf}中有一整行，然后把它拷贝到用户空间，并（通过系统调用机制）返回到用户空间。
 
 \section{代码：控制台输出}
+对连接到控制台的文件描述符的\texttt{write}系统调用最终会到达\texttt{uartputc}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/uart.c#L87}{(kernel/uart.c:87)}。
+设备驱动会维护一个输出缓冲区（\texttt{uart\_tx\_buf}），这样写入操作不需要等待UART完成发送。
+事实上，\texttt{uartputc}把每个字符附加到缓冲区里，调用\texttt{uartstart}来开始设备传输（如果不是已经在传输了的话），然后返回。
+\texttt{uartputc}唯一会等待的情况是缓冲区已经满了。
 
+UART每发送完成一个字节，就会产生一个中断。
+\texttt{uartintr}调用\texttt{uartstart}，后者会检查设备是否已完成发送，并把缓冲区里下一个要发送的字符传给设备。
+因此如果一个进程往控制台写入了很多字节，通常第一个字节会被\texttt{uartputc}调用的\texttt{uartstart}发送出去，剩下的字节将会被\texttt{uartintr}（当传输完成中断到来时会触发它）调用的\texttt{uartstart}发送出去。
+
+需要注意的一般模式是通过缓冲和中断将设备活动与进程活动解耦。
+即使没有进程在等待读取，控制台驱动也可以处理输入，之后的读取将可以看到这些输入。
+类似地，进程可以无需等待设备直接发送输出。
+这种解耦可以让进程和设备I/O并行执行，进而提高性能。
+当设备很慢（例如UART）或者需要立即关注（例如回显输入的字符）的时候这一点尤其重要。
+这个思路有时被称为\emph{I/O并发(I/O concurrency)}。
+
+\section{驱动中的并发}
