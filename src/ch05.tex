@@ -109,4 +109,9 @@ RISC-V通过普通的自陷机制把软件中断传递给内核，并允许内�
 它在\texttt{start}准备的临时存储区域中保存几个寄存器、告诉CLINT什么时候生成下一个时钟中断、让RISC-V抛出一个软件中断、恢复寄存器、返回。
 时钟中断处理程序中没有C代码。
 
+\section{练习}
+\begin{enumerate}
+    \item 修改\texttt{uart.c}，让它完全不使用中断。你可能还需要修改\texttt{console.c}。
+    \item 为以太网卡添加一个驱动。
+\end{enumerate}
 
