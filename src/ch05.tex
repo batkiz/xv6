@@ -55,7 +55,7 @@ xv6的shell通过\texttt{init.c}\href{https://github.com/mit-pdos/xv6-riscv/blob
 被唤醒后，\texttt{consoleread}会看到\texttt{cons.buf}中有一整行，然后把它拷贝到用户空间，并（通过系统调用机制）返回到用户空间。
 
 \section{代码：控制台输出}
-对连接到控制台的文件描述符的\texttt{write}系统调用最终会到达\texttt{uartputc}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/uart.c#L87}{(kernel/uart.c:87)}。
+对连接到控制台的文件描述符的\texttt{write}系统调用最终会到达\texttt{uartputc}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/uart.c#L87}{(kernel/uart.c:87)}。
 设备驱动会维护一个输出缓冲区（\texttt{uart\_tx\_buf}），这样写入操作不需要等待UART完成发送。
 事实上，\texttt{uartputc}把每个字符附加到缓冲区里，调用\texttt{uartstart}来开始设备传输（如果不是已经在传输了的话），然后返回。
 \texttt{uartputc}唯一会等待的情况是缓冲区已经满了。
@@ -93,7 +93,7 @@ RISC-V要求时钟中断要在机器模式下处理，而不是管理模式。
 RISC-V机器模式在没有分页的情况下运行，还有一组单独的控制寄存器，因此想在机器模式下运行普通的xv6内核代码是不切实际的。
 因此，xv6对时钟中断进行了单独处理，与上面的自陷机制完全分离开来。
 
-\texttt{start.c}中的这段代码\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/start.c#L63/start.c:63}{(kernel/start.c:63)}会在机器模式下执行，它会在\texttt{main}之前执行，负责设置接收时钟中断。
+\texttt{start.c}中的这段代码\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/start.c#L63/start.c:63}{(kernel/start.c:63)}会在机器模式下执行，它会在\texttt{main}之前执行，负责设置接收时钟中断。
 其中一部分工作是编程CLINT硬件（core-local的中断器）以让它在经过指定的延迟后生成一个中断。
 另一部分是设置好一块类似于trapframe的临时存储区域，以帮助时钟中断处理程序保存寄存器和CLINT寄存器的地址。
 最后，\texttt{start}把\texttt{timervec}存入\texttt{mtvec}寄存器并开启时钟中断。
@@ -103,11 +103,50 @@ RISC-V机器模式在没有分页的情况下运行，还有一组单独的控�
 处理程序的基本策略是让RISC-V抛出一个“软件中断”然后立即返回。
 
 RISC-V通过普通的自陷机制把软件中断传递给内核，并允许内核禁用它们。
-处理时钟中断生成的软件中断的代码可以在\texttt{devintr}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/trap.c#L205}{(kernel/trap.c:205)}中找到。
+处理时钟中断生成的软件中断的代码可以在\texttt{devintr}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/trap.c#L205}{(kernel/trap.c:205)}中找到。
 
-机器模式下的时钟中断处理程序是\texttt{timervec}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/kernelvec.S#L95}{(kernel/kernelvec.S:95)}。
+机器模式下的时钟中断处理程序是\texttt{timervec}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/kernelvec.S#L95}{(kernel/kernelvec.S:95)}。
 它在\texttt{start}准备的临时存储区域中保存几个寄存器、告诉CLINT什么时候生成下一个时钟中断、让RISC-V抛出一个软件中断、恢复寄存器、返回。
 时钟中断处理程序中没有C代码。
+
+\section{真实世界}
+xv6在执行内核或者用户程序时都允许设备和时钟中断。
+时钟中断会强制进行线程切换（调用\texttt{yield}），即使正在执行内核也一样。
+如果内核线程有时会花费很多时间进行计算而不返回用户空间的话，那么在内核线程之间按时间片公平地共享CPU会很有用。
+然而，内核代码需要注意它有可能会被挂起（因为时钟中断）然后在一个不同的CPU上恢复，这是xv6中一些复杂性的根源（见\autoref{s6-6}）。
+如果只在执行用户代码时发生设备和计时器中断，内核可以变得更简单一些。
+
+在一台典型的计算机上完全支持所有的设备需要很大的工作量，因为有很多设备、设备可能有很多功能、设备和驱动之间的协议可能会很复杂或者没有很好的文档。
+在很多操作系统中，驱动程序的代码核心内核更多。
+
+UART驱动通过读取UART控制寄存器一次获取一个字节的数据，这种模式被称为\emph{编程I/O(programmed I/O)}，因为是软件在驱动数据的传输。
+编程I/O很简单，但太慢以致于无法在高数据速率下使用。
+想要高速传输大量数据的设备通常会使用\emph{直接内存访问(direct memory access, DMA)}。
+DMA设备硬件直接把输入数据写入RAM，并直接从RAM读取输出数据。
+现代磁盘和网络设备都是用了DMA。
+DMA设备的驱动会在RAM中准备数据，然后只写入一次控制寄存器来告诉设备处理准备好的数据。
+
+如果设备需要在无法预料的时刻获取关注并且不是很频繁的话，那么中断很有用。
+中断会导致很高的CPU开销，因此像网络和磁盘控制器这样的高速设备，会使用技巧减少中断的需求。
+一种技巧是为一大批输入或输出请求只产生一次中断。
+另一种技巧是完全禁用中断，并周期性地检查设备是否需要关注。
+这种技术被称为\emph{轮询(polling)}。
+轮询适用的场景是设备可以非常快速地完成操作，但如果设备大部分时间都是空闲的话它会浪费CPU。
+一些驱动根据设备当前的负载动态地在轮询和中断中切换。
+
+UART驱动首先把输入数据拷贝到内核中的缓冲区，然后再拷贝到用户空间。
+在低数据速率下这么做是没有问题的，但对于那些非常快速地产生或消耗数据的设备来说拷贝两次会极大地降低性能。
+一些操作系统可以直接在用户空间缓冲区和设备硬件之间传输数据，通常和DMA一起使用。
+
+正如在\autoref{ch01}中提到的，控制台对应用来说就好像一个普通的文件，并且应用使用\texttt{read}和\texttt{write}系统调用来读取输入和写入输出。
+设备可能有一些无法用标准文件系统调用来表达的部分（例如，启动/禁用控制台驱动中的行缓冲），应用可能会想控制这些部分。
+Unix操作系统支持\texttt{ioctl}系统调用以应对这种情况。
+
+计算机的某些用途要求系统必须在有限的时间内响应。
+例如，在安全敏感的系统中错过ddl可能会导致灾难。
+xv6不适合硬实时的场景。
+硬实时操作系统往往是以一种可以进行分析以确定最坏情况响应时间的方式与应用链接的库\footnote{译者注：此处原文：Operating systems for hard real-time tend to be libraries that link with the application in a way that allows for an analysis to determine the worst-case response time.}。
+xv6也不适合软实时的应用（这类应用中偶尔错过ddl是可以接受的），因为xv6的调度器太过简单并且它的内核代码的执行路径中有很长一段时间会禁用中断。
 
 \section{练习}
 \begin{enumerate}
