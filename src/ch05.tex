@@ -83,3 +83,30 @@ UART每发送完成一个字节，就会产生一个中断。
 例如，中断处理程序不能用当前进程的页表安全地调用\texttt{copyout}。
 中断处理程序通常只做很少的工作（例如，只把输入数据拷贝到一个缓冲区），然后唤醒上半段代码来进行剩余的处理。
 
+\section{时钟中断}
+xv6使用时钟中断来维护它的时钟，并允许xv6在进程间切换。
+\texttt{usertrap}和\texttt{kerneltrap}中的\texttt{yield}会导致进程切换。
+时钟中断来自于连接到RISC-V CPU的时钟。
+xv6对时钟硬件进行编程以周期性的中断每个CPU。
+
+RISC-V要求时钟中断要在机器模式下处理，而不是管理模式。
+RISC-V机器模式在没有分页的情况下运行，还有一组单独的控制寄存器，因此想在机器模式下运行普通的xv6内核代码是不切实际的。
+因此，xv6对时钟中断进行了单独处理，与上面的自陷机制完全分离开来。
+
+\texttt{start.c}中的这段代码\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/start.c#L63/start.c:63}{(kernel/start.c:63)}会在机器模式下执行，它会在\texttt{main}之前执行，负责设置接收时钟中断。
+其中一部分工作是编程CLINT硬件（core-local的中断器）以让它在经过指定的延迟后生成一个中断。
+另一部分是设置好一块类似于trapframe的临时存储区域，以帮助时钟中断处理程序保存寄存器和CLINT寄存器的地址。
+最后，\texttt{start}把\texttt{timervec}存入\texttt{mtvec}寄存器并开启时钟中断。
+
+用户或内核代码在执行时随时都可能出现时钟中断，内核无法在关键操作期间禁用时钟中断。
+因此时钟中断处理程序必须以一种保证不会扰乱被中断的内核代码的方式完成自己的工作。
+处理程序的基本策略是让RISC-V抛出一个“软件中断”然后立即返回。
+
+RISC-V通过普通的自陷机制把软件中断传递给内核，并允许内核禁用它们。
+处理时钟中断生成的软件中断的代码可以在\texttt{devintr}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/trap.c#L205}{(kernel/trap.c:205)}中找到。
+
+机器模式下的时钟中断处理程序是\texttt{timervec}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/kernelvec.S#L95}{(kernel/kernelvec.S:95)}。
+它在\texttt{start}准备的临时存储区域中保存几个寄存器、告诉CLINT什么时候生成下一个时钟中断、让RISC-V抛出一个软件中断、恢复寄存器、返回。
+时钟中断处理程序中没有C代码。
+
+
