@@ -26,6 +26,100 @@ xv6根据具体情况使用了很多并发控制技术，还有可能使用更�
 本章的剩余部分将解释为什么xv6需要锁、xv6如何实现锁、以及如何使用它们。
 
 \section{竞争}
+我们用一个例子来说明为什么我们需要锁，考虑有两个进程正在两个不同的CPU上调用\texttt{wait}等待它们刚结束的子进程。
+\texttt{wait}会释放子进程的内存，因此在每个CPU上，内核都会调用\texttt{kfree}去释放子进程的内存页。
+内核分配器维护了一个链表：\texttt{kalloc()}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/kalloc.c#L69}{(kernel/kalloc.c:69)}从空闲页链表中弹出一个内存页，\texttt{kfree()}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/kalloc.c#L47}{(kernel/kalloc.c:47)}把一个页放进空闲列表。
+为了最好的性能，我们可能会希望两个附近承德\texttt{kfree}能并行执行，无需等待彼此，但对xv6的\texttt{kfree}实现来说这样可能会导致错误的结果。
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.8\textwidth]{../imgs/f6-1.png}
+    \caption{简化的SMP架构}
+    \label{f6-1}
+\end{figure}
+
+\autoref{f6-1}更加详细地演示了这个过程：空闲页的链表所在的内存被两个CPU共享，这两个CPU使用load和store指令操作链表。
+（实际上，处理器是有缓存的，但概念上多处理器系统表现得好像只有单个共享的内存。）
+如果没有并发的请求，你可以像下面这样实现链表的\texttt{push}操作：
+\begin{lstlisting}[numbers=left]
+    struct element {
+        int data;
+        struct element *next;
+    };
+
+    struct element *list = 0;
+
+    void
+    push(int data)
+    {
+        struct element *l;
+        l = malloc(sizeof *l);
+        l->data = data;
+        l->next = list;
+        list = l;
+    }
+\end{lstlisting}
+
+这段代码如果在隔离的环境下执行，那么它是正确的。
+然而，如果有多个副本同时执行，那么它是错误的。
+如果两个CPU同时执行\texttt{push}，可能会像\author{f6-1}所示一样同时执行第15行，这会导致如\autoref{f6-2}所示的错误结果。
+将会有两个链表元素的\texttt{next}都被设成\texttt{list}一开始的值。
+当到达第16行时两个CPU都会给\texttt{list}赋值，第二次赋值将会覆盖第一次赋值，参与第一次赋值的元素将会丢失。
+
+第16行的更新丢失是\emph{竞争(race)}的一个例子。
+竞争是指一个内存位置被并发访问，其中至少一个访问是写入操作。
+竞争通常是bug的标志，可能是更新丢失（如果访问都是写入）或者读取到还未完全更新的数据结构。
+竞争的结果取决于编译器生成的机器代码、两个CPU执行的时间、以及内存系统如何为它们的内存操作排序，这些都可能导致竞争产生的错误难以复现和调试。
+例如，在调试\texttt{push}的时候添加和一条输出语句就可能改变执行的时间，进而导致竞争消失。
+
+避免竞争的通常方法是锁。
+锁保证了\emph{相互排斥(mutual exclusion)}，因此同一时刻只有一个CPU能执行\texttt{push}中的敏感行，这让上面的场景变得不可能再发生。
+上面的代码的正确加锁版本只需要添加几行（第7、16、19行）：
+\begin{lstlisting}[numbers=left,firstnumber=6]
+    struct element *list = 0;
+    struct lock listlock;
+
+    void 
+    push(int data)
+    {
+        struct element *l;
+        l = malloc(sizeof *l);
+        l->data = data;
+        
+        acquire(&listlock);
+        l->next = list;
+        list = l;
+        release(&listlock);
+    }
+\end{lstlisting}
+
+\texttt{acquire}和\texttt{release}之间的指令序列通常被称为\emph{临界区(critical section)}。
+通常说锁保护了\texttt{list}。
+
+当我们说锁保护数据时，我们实际上是在说锁保护了适用于这个数据的一些不变量的集合。
+不变量是数据结构在多个操作间维护的属性。
+通常情况下，一个操作的行为正确依赖于操作开始时不变量为真。
+操作可能会临时违反不变量但最终会在结束之前恢复。
+例如，在这个列表的例子中，不变量是\texttt{list}指向链表中的第一个元素并且每个元素的\texttt{next}字段指向下一个元素。
+\texttt{push}的实现短暂违反了不变量：在第17行，\texttt{l}指向了下一个链表元素，但\texttt{list}还没有指向\texttt{l}（在第18行恢复了不变量）。
+我们之前讨论的竞争会发生是因为第二个CPU执行代码时依赖于链表的不变量，但它们被（临时地）违反了。
+恰当地使用锁可以确保同一时刻在临界区内只有一个CPU可以操作数据结构，因此在数据结构的不变量不成立时不会有其他CPU操作这个数据结构。
+
+你可以把锁看成\emph{串行化(serializing)}了临界区，所以它们只能同时运行一个，因此保证了不变量（假设临界区在隔离环境中是正确的）。
+你也可以想象成被同一个锁保护的临界区是原子的，因此每个CPU只能看到其他CPU执行完临界区之后的变化，而不能看到部分执行时的变化。
+
+尽管锁在确保正确性时非常有用，但它会潜在地限制性能。
+例如，如果两个进程并发调用\texttt{kfree}，锁将会串行化两个临界区，因此将不能受益于在不同CPU上执行它们。
+如果两个进程同时想获取同一个锁，我们说这两个进程\emph{冲突(conflict)}了，或者说锁遇到了\emph{争用(contention)}。
+内核设计中一个主要的挑战就是如何在追求并行性的同时避免锁的争用。
+xv6在这方面只作了很少的工作，但成熟的内核通过特殊地组织内核数据结构和算法来避免争用。
+在链表的例子中，内核可以为每个CPU维护一个单独的空闲链表，并只有在当前CPU的链表为空，需要从其他CPU那里偷取内存时才会访问另一个CPU的空闲链表。
+其他的用例可能会需要更加复杂的设计。
+
+放置锁的位置也会严重影响到性能。
+例如，如果把\texttt{acquire}移动到\texttt{push}之前，也就是13行之前，那么代码也是正确的。
+但这可能会降低性能因为这样的话对\texttt{malloc}的调用也会串行化。
+“使用锁”这一节中将会提供一些在哪里插入\texttt{acquire}和\texttt{release}的指导意见。
 
 \section{代码：锁}
 
