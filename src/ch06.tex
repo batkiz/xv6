@@ -122,6 +122,50 @@ xv6在这方面只作了很少的工作，但成熟的内核通过特殊地组�
 “使用锁”这一节中将会提供一些在哪里插入\texttt{acquire}和\texttt{release}的指导意见。
 
 \section{代码：锁}
+xv6有两种锁：自选锁和睡眠锁。
+我们将以自选锁开始。
+xv6用\texttt{struct spinlock}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/spinlock.h#L2}{(kernel/spinlock.h:2)}表示自选锁。
+这个结构体中比较重要的字段是\texttt{locked}，当锁可用时它的值是0，当已经被持有时值为1。
+逻辑上讲，xv6应该执行类似这样的代码来获取一个锁
+\begin{lstlisting}[numbers=left,firstnumber=21]
+    void
+    acquire(struct spinlock *lk) // does not work!
+    {
+        for (;;) {
+            if (lk->locked == 0) {
+                lk->locked = 1;
+                break;
+            }
+        }
+    }
+\end{lstlisting}
+不幸的是，这种实现在多处理器上并不能保证互斥。
+两个CPU可能会同时到达第25行，然后发现\texttt{lk->locked}是0，然后都执行第26行获取锁。
+这时，两个不同的CPU都持有了这个锁，这违背了互斥的属性。
+我们需要的是把第25行和第26行做为一个\emph{原子(atomic)}（即不可分割）的步骤执行。
+
+因为锁被广泛使用，多核处理器通常提供第25行和第26行的一个原子版本。
+在RISC-V上这个指令是\texttt{amoswap r, a}。
+\texttt{smoswap}读取内存地址\texttt{a}处的值，把寄存器\texttt{r}的内容写入这个地址，再把读取到的值写入\texttt{r}。
+也就是说，它交换了寄存器和内存地址处的值。
+它以原子的方式执行这一系列操作，使用特殊的硬件来防止任何其他的CPU在它读写过程中使用这个内存地址。
+
+xv6的\texttt{acquire}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/spinlock.c#L22}{(kernel/spinlock.c:22)}使用了可移植的C库调用\texttt{\_\_sync\_lock\_test\_and\_set}，它会转换为\texttt{amoswap}指令，返回值是之前的（被交换的）\texttt{lk->locked}的内容。
+\texttt{acquire}函数把这个交互包装在了一个循环中，尝试（自旋）直到它获取锁。
+每一次迭代都把1和\texttt{lk->locked}交换然后检查\texttt{lk->locked}之前的值，如果之前的值是0，那么就说明已经获取锁了，然后这一次交互已经把\texttt{lk->locked}设置为1了。
+如果之前的值是1，那么说明其他的CPU持有了这个锁，我们原子地把1交换进\texttt{lk->locked}并不会改变它的值。
+
+一旦获取了锁，\texttt{acquire}会记录下CPU获取了这个锁（为了调试）。
+\texttt{lk->cpu}字段被锁保护并只能在持有锁的时候修改。
+
+函数\texttt{release}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/spinlock.c#L47}{(kernel/spinlock.c:47)}和\texttt{acquire}相反：它清空\texttt{lk->cpu}字段，然后释放锁。
+概念上讲，释放操作只需要把0赋值给\texttt{lk->locked}。
+C标准允许编译器用多条store指令实现赋值操作，因此一条C赋值语句可能不是原子的。
+作为代替，\texttt{release}使用了C库函数\texttt{\_\_sync\_lock\_release}来进行原子的赋值。
+这个函数也会转换为RISC-V的\texttt{amoswap}指令。
+
+
+
 
 \section{代码：使用锁}
 
