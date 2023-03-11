@@ -253,5 +253,46 @@ xv6中很可能也还有未被发现的竞争。
 避免死锁通常是内核设计中的一个主要因素。
 
 \section{可重入锁}
+通过使用\emph{可重入锁(re-entrant lock)}可以避免一些死锁和加锁顺序的挑战，它也被称为\emph{递归锁(recursive lock)}。
+它的关键思路是如果它已经被一个进程持有了，并且这个进程再次尝试获取它，那么内核会允许这一次获取（因为这个进程已经持有这个锁了），而不是调用panic，xv6就是这么做的。
+
+然而事实证明，可重入锁让并发变得更加难以理解：可重入锁打破了锁可以让临界区变为原子的这一特点。
+考虑下面的两个函数\texttt{f}和\texttt{g}：
+\begin{lstlisting}
+    struct spinlock lock;
+    int data = 0;   // 被锁保护
+    
+    f() {
+        acquire(&lock);
+        if (data == 0) {
+            call_once();
+            h();
+            data = 1;
+        }
+        release(&lock);
+    }
+
+    g() {
+        acquire(&lock);
+        if (data == 0) {
+            call_once();
+            data = 1;
+        }
+        release(&lock);
+    }
+\end{lstlisting}
+
+这个代码片段中，直觉上好像\texttt{call\_once}只会被调用一次：要么被\texttt{f}调用，要么被\texttt{g}调用，而不会两个都调用。
+
+但如果允许可重入锁，并且\texttt{h}恰好调用了\texttt{g}，那么\texttt{call\_once}可能会被调用\emph{两次}。
+
+如果不允许可重入锁，那么\texttt{h}调用\texttt{g}会导致死锁，这同样也不好。
+但是，假如调用\texttt{call\_once}两次会产生非常严重的错误，那么死锁可能会更好一点。
+内和开发者将会观测到这个死锁（内核会panic）并且修复代码来避免它，然而调用\texttt{call\_once}两次可能无声无息地导致难以追踪的错误。
+
+出于这个原因，xv6使用了更易于理解的非重入锁。
+不过，只要程序员时刻谨记加锁的规则，每种方案都可以正常工作。
+如果xv6使用可重入锁，那么需要修改\texttt{acquire}让它注意锁是否已经被当前线程持有了。
+可能还需要给spinlock结构体添加一个嵌套获取次数的计数器，类似于之后要讨论的\texttt{push\_off}。
 
 \section{锁和中断处理程序}\label{s6-6}
