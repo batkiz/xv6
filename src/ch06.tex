@@ -129,9 +129,9 @@ xv6在这方面只作了很少的工作，但成熟的内核通过特殊地组�
 “使用锁”这一节中将会提供一些在哪里插入\texttt{acquire}和\texttt{release}的指导意见。
 
 \section{代码：锁}
-xv6有两种锁：自选锁和睡眠锁。
-我们将以自选锁开始。
-xv6用\texttt{struct spinlock}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/spinlock.h#L2}{(kernel/spinlock.h:2)}表示自选锁。
+xv6有两种锁：自旋锁和睡眠锁。
+我们将以自旋锁开始。
+xv6用\texttt{struct spinlock}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/spinlock.h#L2}{(kernel/spinlock.h:2)}表示自旋锁。
 这个结构体中比较重要的字段是\texttt{locked}，当锁可用时它的值是0，当已经被持有时值为1。
 逻辑上讲，xv6应该执行类似这样的代码来获取一个锁
 \begin{lstlisting}[numbers=left,firstnumber=21]
@@ -296,3 +296,28 @@ xv6中很可能也还有未被发现的竞争。
 可能还需要给spinlock结构体添加一个嵌套获取次数的计数器，类似于之后要讨论的\texttt{push\_off}。
 
 \section{锁和中断处理程序}\label{s6-6}
+一些xv6的自旋锁被用来保护那些同时被线程和中断处理程序使用的数据。
+例如，\texttt{clockintr}时钟中断处理程序可能会递增\texttt{ticks}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/trap.c#L164}{(kernel/trap.c:164)}，同时内核线程也可能在\texttt{sys\_sleep}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/sysproc.c#L59}{(kernel/sysproc.c:59)}中读取\texttt{ticks}。
+\texttt{tickslock}锁序列化了这两个访问。
+
+自旋锁和中断的相互作用引入了一个潜在的风险。
+假设\texttt{sys\_sleep}持有了\texttt{tickslock}，并且它的CPU被一个时钟中断中断。
+那么\texttt{clockintr}将会尝试获取\texttt{tickslock}，然后发现它已经被持有了，就开始等待它被释放。
+在这种情况下，\texttt{tickslock}将永远不会被释放：只有\texttt{sys\_sleep}可以释放它，但是\texttt{sys\_sleep}将直到\texttt{clockintr}返回时才能继续执行。
+因此CPU会死锁，并且任何需要加锁的代码也会冻结。
+
+为了避免这种情况，如果在中断处理程序使用了自旋锁，那么CPU决不能在允许中断的情况下持有它。
+xv6更加保守：当一个CPU获取任何锁时，xv6总是会禁用那个CPU上的中断。
+中断仍然可能出现在其他CPU上，因此中断的\texttt{acquire}可能还是会等待一个线程释放一个自旋锁，不过不是在同一个CPU上。
+
+xv6在CPU不持有自旋锁时重新启用中断，它必须做一些簿记来处理嵌套的临界区。
+\texttt{acquire}调用\texttt{push\_off}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/spinlock.c#L89}{(kernel/spinlock.c:89)}、\texttt{release}调用\texttt{pop\_off}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/spinlock.c#L100}{(kernel/spinlock.c:100)}来追踪当前CPU上锁的嵌套层级。
+当计数为0时，\texttt{pop\_off}会恢复最外层临界区开始时中断的启用状态。
+\texttt{intr\_off}和\texttt{intr\_on}函数执行RISC-V执行来分别禁用和启用中断。
+
+重要的一点是\texttt{acquire}必须在设置\texttt{lk->locked}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/spinlock.c#L28}{(kernel/spinlock.c:28)}之前调用\texttt{push\_off}。
+如果顺序反了，将会有一个很短的窗口期，此时锁已经被持有了，而中断还是启用的状态，此时如果不行发生时钟中断可能会导致系统死锁。
+类似地，\texttt{release}在释放锁\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/spinlock.c#L66}{(kernel/spinlock.c:66)}之后调用\texttt{pop\_off}也很重要。
+
+\section{指令和内存顺序}
+
