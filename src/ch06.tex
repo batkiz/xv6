@@ -346,4 +346,22 @@ xv6的\texttt{acquire}和\texttt{release}中的屏障在几乎所有重要的情
 \autoref{ch09}中将会讨论少数的例外情况。
 
 \section{睡眠锁}
+有时xv6需要长时间持有一个锁。
+例如，文件系统（\autoref{ch08}）在读取或写入一个磁盘上的文件时需要长时间持有一个文件锁，而这些磁盘操作可能需要花费几十毫秒。
+如果使用自旋锁的话，如果有其他进程尝试获取它将会造成CPU的浪费，因为请求的进程将会长时间自旋浪费CPU时间。
+自选锁的另一个缺点是一个进程在持有自选锁的时候不能让出CPU，我们希望可以做到这一点，这样当持有锁的进程在等待磁盘时，其他进程可以使用这个CPU。
+在持有自选锁时让出CPU是不合法的，因为如果有第二个线程尝试获取这个自选锁，那么可能会导致死锁，因为\texttt{acquire}并不让出CPU，第二个线程的自旋可能会阻止第一个线程运行和释放锁。
+在持有锁时让出CPU也违背了持有自选锁时必须关闭中断的要求。
+因此我们可能会希望有一种锁可以在等待获取锁时让出CPU，并允许在持有锁的时候让出CPU（和中断）。
+
+xv6以\emph{睡眠锁(sleep-lock)}的形式提供了这种锁。
+\texttt{acquiresleep}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/sleeplock.c#L22}{(kernel/sleeplock.c:22)}会在等待时使用\autoref{ch07}中将介绍的技术让出CPU。
+从宏观角度看，一个睡眠锁有一个被自选锁保护的\texttt{locked}字段，\texttt{acquiresleep}对\texttt{sleep}的调用会自动让出CPU并释放自选锁。
+这样在\texttt{acquiresleep}等待时其他线程可移植性。
+
+因为睡眠锁并不禁用中断，所以它们不能在终端处理程序中使用。
+因为\texttt{acquiresleep}可能会让出CPU，所以睡眠锁也不能在自选锁的临界区中使用（尽管自选锁可以在睡眠锁的临界区内使用）。
+
+自选锁最适合短暂的临界区，因为等待它们会浪费CPU时间，睡眠锁适用于长时间的操作。
+
 
