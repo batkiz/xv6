@@ -28,7 +28,7 @@ xv6根据具体情况使用了很多并发控制技术，还有可能使用更�
 \section{竞争}
 我们用一个例子来说明为什么我们需要锁，考虑有两个进程正在两个不同的CPU上调用\texttt{wait}等待它们刚结束的子进程。
 \texttt{wait}会释放子进程的内存，因此在每个CPU上，内核都会调用\texttt{kfree}去释放子进程的内存页。
-内核分配器维护了一个链表：\texttt{kalloc()}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/kalloc.c#L69}{(kernel/kalloc.c:69)}从空闲页链表中弹出一个内存页，\texttt{kfree()}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/kalloc.c#L47}{(kernel/kalloc.c:47)}把一个页放进空闲列表。
+内核分配器维护了一个链表：\texttt{kalloc()}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/kalloc.c#L69}{(kernel/kalloc.c:69)}从空闲页链表中弹出一个内存页，\texttt{kfree()}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/kalloc.c#L47}{(kernel/kalloc.c:47)}把一个页放进空闲列表。
 为了最好的性能，我们可能会希望两个附近承德\texttt{kfree}能并行执行，无需等待彼此，但对xv6的\texttt{kfree}实现来说这样可能会导致错误的结果。
 
 \begin{figure}[htbp]
@@ -131,7 +131,7 @@ xv6在这方面只作了很少的工作，但成熟的内核通过特殊地组�
 \section{代码：锁}
 xv6有两种锁：自旋锁和睡眠锁。
 我们将以自旋锁开始。
-xv6用\texttt{struct spinlock}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/spinlock.h#L2}{(kernel/spinlock.h:2)}表示自旋锁。
+xv6用\texttt{struct spinlock}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/spinlock.h#L2}{(kernel/spinlock.h:2)}表示自旋锁。
 这个结构体中比较重要的字段是\texttt{locked}，当锁可用时它的值是0，当已经被持有时值为1。
 逻辑上讲，xv6应该执行类似这样的代码来获取一个锁
 \begin{lstlisting}[numbers=left,firstnumber=21]
@@ -157,7 +157,7 @@ xv6用\texttt{struct spinlock}\href{https://github.com/mit-pdos/xv6-riscv/blob/r
 也就是说，它交换了寄存器和内存地址处的值。
 它以原子的方式执行这一系列操作，使用特殊的硬件来防止任何其他的CPU在它读写过程中使用这个内存地址。
 
-xv6的\texttt{acquire}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/spinlock.c#L22}{(kernel/spinlock.c:22)}使用了可移植的C库调用\texttt{\_\_sync\_lock\_test\_and\_set}，它会转换为\texttt{amoswap}指令，返回值是之前的（被交换的）\texttt{lk->locked}的内容。
+xv6的\texttt{acquire}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/spinlock.c#L22}{(kernel/spinlock.c:22)}使用了可移植的C库调用\texttt{\_\_sync\_lock\_test\_and\_set}，它会转换为\texttt{amoswap}指令，返回值是之前的（被交换的）\texttt{lk->locked}的内容。
 \texttt{acquire}函数把这个交互包装在了一个循环中，尝试（自旋）直到它获取锁。
 每一次迭代都把1和\texttt{lk->locked}交换然后检查\texttt{lk->locked}之前的值，如果之前的值是0，那么就说明已经获取锁了，然后这一次交互已经把\texttt{lk->locked}设置为1了。
 如果之前的值是1，那么说明其他的CPU持有了这个锁，我们原子地把1交换进\texttt{lk->locked}并不会改变它的值。
@@ -165,7 +165,7 @@ xv6的\texttt{acquire}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//ke
 一旦获取了锁，\texttt{acquire}会记录下CPU获取了这个锁（为了调试）。
 \texttt{lk->cpu}字段被锁保护并只能在持有锁的时候修改。
 
-函数\texttt{release}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/spinlock.c#L47}{(kernel/spinlock.c:47)}和\texttt{acquire}相反：它清空\texttt{lk->cpu}字段，然后释放锁。
+函数\texttt{release}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/spinlock.c#L47}{(kernel/spinlock.c:47)}和\texttt{acquire}相反：它清空\texttt{lk->cpu}字段，然后释放锁。
 概念上讲，释放操作只需要把0赋值给\texttt{lk->locked}。
 C标准允许编译器用多条store指令实现赋值操作，因此一条C赋值语句可能不是原子的。
 作为代替，\texttt{release}使用了C库函数\texttt{\_\_sync\_lock\_release}来进行原子的赋值。
@@ -173,7 +173,7 @@ C标准允许编译器用多条store指令实现赋值操作，因此一条C赋�
 
 \section{代码：使用锁}
 xv6在很多地方使用锁来避免竞争。
-正如之前说的，\texttt{kalloc}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/kalloc.c#L69}{(kernel/kalloc.c:69)}和\texttt{kfree}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/kalloc.c#L47}{(kernel/kalloc.c:47)}就是一个很好的例子。
+正如之前说的，\texttt{kalloc}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/kalloc.c#L69}{(kernel/kalloc.c:69)}和\texttt{kfree}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/kalloc.c#L47}{(kernel/kalloc.c:47)}就是一个很好的例子。
 尝试练习1和2来搞清楚如果这些函数省略了锁会发生什么。
 你可能会发现很难触发错误的行为，记住想要可靠地测试处代码是否没有锁错误和竞争是非常困难的。
 xv6中很可能也还有未被发现的竞争。
@@ -237,7 +237,7 @@ xv6中很可能也还有未被发现的竞争。
 需要这种全局的锁获取顺序意味着锁实际上是每个函数规范的一部分：调用者必须以一种按照指定顺序获取锁的方式调用函数。
 
 因为\texttt{sleep}的工作方式（\autoref{ch07}），xv6有很多获取两个每个进程的锁（每个\texttt{struct proc}中的锁）的顺序。
-例如，\texttt{consoleintr}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/console.c#L136}{(kernel/console.c:136)}是处理输入字符的中断处理程序。
+例如，\texttt{consoleintr}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/console.c#L136}{(kernel/console.c:136)}是处理输入字符的中断处理程序。
 当有一个换行符到达时，任何等待控制台输入的进程都应该被唤醒。
 为了做到这一点，\texttt{consoleintr}在调用\texttt{wakeup}时会持有\texttt{cons.lock}，这个函数会获取正在等待的进程的锁以便唤醒它。
 全局的避免死锁加锁顺序包括了\texttt{cons.lock}必须在任何进程锁被获取之前先被获取。
@@ -297,7 +297,7 @@ xv6中很可能也还有未被发现的竞争。
 
 \section{锁和中断处理程序}\label{s6-6}
 一些xv6的自旋锁被用来保护那些同时被线程和中断处理程序使用的数据。
-例如，\texttt{clockintr}时钟中断处理程序可能会递增\texttt{ticks}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/trap.c#L164}{(kernel/trap.c:164)}，同时内核线程也可能在\texttt{sys\_sleep}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/sysproc.c#L59}{(kernel/sysproc.c:59)}中读取\texttt{ticks}。
+例如，\texttt{clockintr}时钟中断处理程序可能会递增\texttt{ticks}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/trap.c#L164}{(kernel/trap.c:164)}，同时内核线程也可能在\texttt{sys\_sleep}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/sysproc.c#L59}{(kernel/sysproc.c:59)}中读取\texttt{ticks}。
 \texttt{tickslock}锁序列化了这两个访问。
 
 自旋锁和中断的相互作用引入了一个潜在的风险。
@@ -311,13 +311,100 @@ xv6更加保守：当一个CPU获取任何锁时，xv6总是会禁用那个CPU�
 中断仍然可能出现在其他CPU上，因此中断的\texttt{acquire}可能还是会等待一个线程释放一个自旋锁，不过不是在同一个CPU上。
 
 xv6在CPU不持有自旋锁时重新启用中断，它必须做一些簿记来处理嵌套的临界区。
-\texttt{acquire}调用\texttt{push\_off}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/spinlock.c#L89}{(kernel/spinlock.c:89)}、\texttt{release}调用\texttt{pop\_off}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/spinlock.c#L100}{(kernel/spinlock.c:100)}来追踪当前CPU上锁的嵌套层级。
+\texttt{acquire}调用\texttt{push\_off}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/spinlock.c#L89}{(kernel/spinlock.c:89)}、\texttt{release}调用\texttt{pop\_off}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/spinlock.c#L100}{(kernel/spinlock.c:100)}来追踪当前CPU上锁的嵌套层级。
 当计数为0时，\texttt{pop\_off}会恢复最外层临界区开始时中断的启用状态。
 \texttt{intr\_off}和\texttt{intr\_on}函数执行RISC-V执行来分别禁用和启用中断。
 
-重要的一点是\texttt{acquire}必须在设置\texttt{lk->locked}\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/spinlock.c#L28}{(kernel/spinlock.c:28)}之前调用\texttt{push\_off}。
+重要的一点是\texttt{acquire}必须在设置\texttt{lk->locked}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/spinlock.c#L28}{(kernel/spinlock.c:28)}之前调用\texttt{push\_off}。
 如果顺序反了，将会有一个很短的窗口期，此时锁已经被持有了，而中断还是启用的状态，此时如果不行发生时钟中断可能会导致系统死锁。
-类似地，\texttt{release}在释放锁\href{https://github.com/mit-pdos/xv6-riscv/blob/riscv//kernel/spinlock.c#L66}{(kernel/spinlock.c:66)}之后调用\texttt{pop\_off}也很重要。
+类似地，\texttt{release}在释放锁\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/spinlock.c#L66}{(kernel/spinlock.c:66)}之后调用\texttt{pop\_off}也很重要。
 
 \section{指令和内存顺序}
+程序按照源代码中语句的顺序执行似乎是一件很自然的事。
+对于单线程代码来说这是合理的模型，但在多线程和共享内存交互时这么想是错误的[2,4]。
+一个原因是编译器通常会以和源代码不同的顺序发射load和store指令，甚至也可能完全省略它们（例如把数据缓存在寄存器中）。
+另一个原因是CPU可能会乱序执行指令以提高性能。
+例如，一个CPU可能注意到在一个串行指令序列中A指令和B指令并不依赖彼此。
+那么CPU可能先开始执行B指令，这可能是因为它的输入比A指令的输入更早准备完成，也可能是为了重叠执行A指令和B指令。
 
+作为一个可能出错的例子，这段\texttt{push}的代码中，如果编译器或者CPU把第4行的存储移动到了第6行的\texttt{release}之后，那么将会导致灾难：
+\begin{lstlisting}[numbers=left]
+    l = malloc(sizeof *l);
+    l->data = data;
+    acquire(&listlock);
+    l->next = list;
+    list = l;
+    release(&listlock);
+\end{lstlisting}
+如果发生了这种重新排序，那么将会出现一个窗口，这个窗口内另一个CPU可能会获取锁并看到已经更新过的\texttt{list}，但\texttt{list->next}还未初始化。
+
+好消息是编译器和CPU可以通过一组称为\emph{内存模型(memory model)}的规则和提供一些帮助程序员控制重新排序的原语为并发程序员提供帮助。
+
+为了告诉硬件和编译器不要重新排序，xv6在\texttt{acquire}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/spinlock.c#L22}{(kernel/spinlock.c:22)}和\texttt{release}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/spinlock.c#L47}{(kernel/spinlock.c:47)}中都使用了\texttt{\_\_sync\_synchronize()}。
+\texttt{\_\_sync\_synchronize()}是一个\emph{内存屏障(memory barrier)}：它告诉编译器和CPU在重新排序时不要跨过这道屏障。
+xv6的\texttt{acquire}和\texttt{release}中的屏障在几乎所有重要的情况下强迫顺序，因为xv6使用了锁来控制共享数据的访问。
+\autoref{ch09}中将会讨论少数的例外情况。
+
+\section{睡眠锁}
+有时xv6需要长时间持有一个锁。
+例如，文件系统（\autoref{ch08}）在读取或写入一个磁盘上的文件时需要长时间持有一个文件锁，而这些磁盘操作可能需要花费几十毫秒。
+如果使用自旋锁的话，如果有其他进程尝试获取它将会造成CPU的浪费，因为请求的进程将会长时间自旋浪费CPU时间。
+自选锁的另一个缺点是一个进程在持有自选锁的时候不能让出CPU，我们希望可以做到这一点，这样当持有锁的进程在等待磁盘时，其他进程可以使用这个CPU。
+在持有自选锁时让出CPU是不合法的，因为如果有第二个线程尝试获取这个自选锁，那么可能会导致死锁，因为\texttt{acquire}并不让出CPU，第二个线程的自旋可能会阻止第一个线程运行和释放锁。
+在持有锁时让出CPU也违背了持有自选锁时必须关闭中断的要求。
+因此我们可能会希望有一种锁可以在等待获取锁时让出CPU，并允许在持有锁的时候让出CPU（和中断）。
+
+xv6以\emph{睡眠锁(sleep-lock)}的形式提供了这种锁。
+\texttt{acquiresleep}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/sleeplock.c#L22}{(kernel/sleeplock.c:22)}会在等待时使用\autoref{ch07}中将介绍的技术让出CPU。
+从宏观角度看，一个睡眠锁有一个被自选锁保护的\texttt{locked}字段，\texttt{acquiresleep}对\texttt{sleep}的调用会自动让出CPU并释放自选锁。
+这样在\texttt{acquiresleep}等待时其他线程可移植性。
+
+因为睡眠锁并不禁用中断，所以它们不能在终端处理程序中使用。
+因为\texttt{acquiresleep}可能会让出CPU，所以睡眠锁也不能在自选锁的临界区中使用（尽管自选锁可以在睡眠锁的临界区内使用）。
+
+自选锁最适合短暂的临界区，因为等待它们会浪费CPU时间，睡眠锁适用于长时间的操作。
+
+\section{真实世界}
+关于并发原语和并行的研究尽管已经持续了很多年，但使用锁进行编程仍然是很有挑战性的。
+通常情况下最好的做法是把锁隐藏在更高级的数据结构中，例如同步队列，尽管xv6并没有这么做。
+如果你需要使用锁进行编程，那么使用一个能尝试识别竞争的工具是很明智的，因为你很容易遗漏为不变量加锁。
+
+大多数操作系统都支持POSIX线程（pthreads），它允许一个用户进程有多个线程可以并发低运行在不同的CPU上。
+pthread支持用户级的锁、屏障等。
+pthread还允许程序员可选地指定锁是否应该是可重入的。
+
+支持用户级的pthread需要操作系统的支持。
+例如，如果一个pthread在一个系统调用中阻塞，那么另一个同进程的pthread应该能在这个CPU上继续运行。
+作为另一个例子，如果一个pthread修改了它的进程的地址空间（例如，映射或者取消映射了内存），内核必须安排其他运行该进程的其他线程的CPU，让它们更新硬件页表以反映地址空间的变化。
+
+不使用原子操作也是有可能实现锁的[10]，但代价会很昂贵，大多数操作系统都使用了原子指令。
+
+如果很多CPU同时尝试获取同一个锁，那么锁可能会很昂贵。
+如果一个CPU在它的本地缓存中缓存了一个锁，并且其他的CPU必须获取这个锁，那么更新存储锁的缓存行的原子指令必须把这一个缓存行从一个CPU的缓存移动到其他CPU的缓存，并可能使缓存行的任何其他副本无效。
+从另一个CPU的缓存中获取一个缓存行要比从本地缓存中获取一个缓存行慢上几个数量级。
+
+为了避免与锁相关的开销，很多操作系统使用了无锁的数据结构和算法[6,12].
+例如，实现一个类似本章开头的链表，但在搜索链表时不使用锁、使用原子指令来在链表中插入元素的链表是可能的。
+然而，无锁编程比使用锁编程更加复杂。
+例如，你必须担心指令和内存顺序。
+使用锁编程已经很难了，因此xv6避免了无锁编程带来的额外复杂性。
+
+\section{练习}
+\begin{enumerate}
+    \item 注释掉\texttt{kalloc}\href{https://github.com/mit-pdos/xv6-riscv/blob/risc/kernel/kalloc.c#L69}{(kernel/kalloc.c:69)}中的\texttt{acquire}和\texttt{release}调用。
+    这似乎应该会给调用\texttt{kalloc}的内核代码带来问题，你预计会看到什么症状？
+    当你运行xv6时，你看到这些症状了吗？
+    运行\texttt{usertests}时呢？
+    如果你没有看到问题，那是为什么呢？
+    试试看你是否可以通过在\texttt{kalloc}的临界区插入虚拟循环来引发问题。
+    \item 假设你注释了\texttt{kfree}中的锁操作（假设你没有修改\texttt{kalloc}）。
+    现在可能会出现什么错误？
+    \texttt{kfree}缺少锁会比\texttt{kalloc}缺少锁的危害更小吗？
+    \item 如果两个CPU同时调用\texttt{kalloc}，其中一个将必须等待另一个，这会降低性能。
+    修改\texttt{kalloc.c}以获取更高的并行度，让同时来自不同CPU的\texttt{kalloc}调用可以无需等待彼此继续执行。
+    \item 编写一个使用POSIX线程的并行程序（大部分操作系统都支持POSIX线程）。
+    例如，实现一个并行哈希表并测量put/get的数量是否随着核数的增加而缩放。
+    \item 在xv6中实现一个pthread的子集。
+    也就是说，实现一个用户级的线程库，这样用户进程可以有不止一个线程，并且安排这些线程可以在不同的CPU上并行运行。
+    想出一个设计可以正确地处理一个在系统调用中阻塞并修改它的共享地址空间的线程。
+\end{enumerate}
